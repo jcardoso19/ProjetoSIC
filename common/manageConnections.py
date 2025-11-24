@@ -18,16 +18,9 @@ def connect () :
     
     adapter = adapters[( int( input("Enter choise:") ) )]
 
-    # Select scan preconditions/presetactions
-    adapter.set_callback_on_scan_start(lambda: print("Scan started."))
-    adapter.set_callback_on_scan_stop(lambda: print("Scan complete."))
-    adapter.set_callback_on_scan_found(lambda peripheral: print(f"Found {peripheral.identifier()} [{peripheral.address()}]"))
-    
-    # 5 sec
-    adapter.scan_for(5000)
-    
     # Escolher target a ser usado
-    targets = adapter.scan_get_results()
+    targets = makeScan(adapter, 5000)
+
     print("Chose target:\n ")
     for i, target in enumerate(targets) :
         print(f"{i}: {target.identifier()} [{target.address()})
