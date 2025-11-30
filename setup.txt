@@ -1,0 +1,20 @@
+#1
+sudo apt-get install python3-dev python3-pip python3-venv libdbus-1-dev libglib2.0-dev
+
+# 2.
+cd common/
+python3 -m venv venv
+
+# 3.
+source venv/bin/activate
+
+# 4.
+pip install simplepyble
+pip install bless
+pip install "bleak==0.19.5"
+
+# 5.
+cd ..
+
+# 6. 
+PARA TESTAR, MUDAR LINHA 5 EM **scan.py**

@@ -1,50 +1,80 @@
 import simplepyble
+import time
 
-def connect () :
+from common.scan import scan_for_candidates
 
-    # Parte inicial de escolha de adaptador pode depois ser retirada caso exista um apenas
-    # por componente ou já existir predefenido para o mesmo
-    # O mesmo se aplica caso produto final seja rede de ligações ja predefinidas
-    
-    adapters = simplepyble.Adapter.get_adapters()
+from common.scan import scan_for_candidates
+class ConnectionManager:
+    def __init__(self):
+        self.adapter = self._get_adapter()
+        self.uplink = None 
+        self.uplink_info = {}
 
-    if len(adapters) == 0 :
-        print("No adapters found")
+    def _get_adapter(self):
+        """Seleciona automaticamente o primeiro adaptador Bluetooth disponível."""
+        adapters = simplepyble.Adapter.get_adapters()
+        if not adapters:
+            raise Exception("ERRO CRÍTICO: Nenhum adaptador Bluetooth encontrado.")
+        
+        adapter = adapters[0]
+        print(f"[INIT] A usar adaptador: {adapter.identifier()} [{adapter.address()}]")
+        return adapter
 
-    # Escolher adaptador a ser usado
-    print("Chose and adapter:\n")
-    for i, adapter in enumerate(adapters) :
-        print(f"{i}: {adapter.identifier()} [{adapter.address()})
-    
-    adapter = adapters[( int( input("Enter choise:") ) )]
+    def find_and_connect_uplink(self):
+        """
+        Tenta encontrar o melhor pai e conectar-se.
+        Retorna True se conectado, False se falhou.
+        """
+        if self.uplink and self.uplink_is_alive():
+            print("[MANAGER] Já temos Uplink. Regra Lazy: manter atual.")
+            return True
 
-    # Escolher target a ser usado
-    targets = makeScan(adapter, 5000)
+        print("[MANAGER] A procurar novo Uplink...")
+        candidates = scan_for_candidates(self.adapter)
 
-    print("Chose target:\n ")
-    for i, target in enumerate(targets) :
-        print(f"{i}: {target.identifier()} [{target.address()})
+        if not candidates:
+            print("[MANAGER] Nenhum nó vizinho encontrado.")
+            return False
 
-    target = targets[( int( input("Enter choise: ") ) )]
+        for candidate in candidates:
+            target_device = candidate['device_obj']
+            print(f"[CONNECT] A tentar conectar a {candidate['name']} (Hops: {candidate['hops']})...")
+            
+            try:
+                target_device.connect()
+                
+                self.uplink = target_device
+                self.uplink_info = candidate
+                print(f"[SUCCESS] Conectado a {candidate['name']}! (Meu novo uplink)")
+                
+                target_device.set_callback_on_disconnected(self.on_uplink_lost)
+                
+                return True
+                
+            except Exception as e:
+                print(f"[FAIL] Falha ao conectar a {candidate['name']}: {e}")
+                continue
+        
+        print("[MANAGER] Falha: Não foi possível conectar a nenhum candidato.")
+        return False
 
-    # Executing the connection
-    print("Connecting...")
-    try:
-        target.connect()
-    except:
-        print("Target was't able to establish connection")
-        return None
+    def uplink_is_alive(self):
+        if self.uplink:
+            try:
+                return True 
+            except:
+                return False
+        return False
 
-    print("Connected!")
-    return target
+    def on_uplink_lost(self):
+        print("\n[ALERT] UPLINK PERDIDO! A iniciar procedimentos de recuperação...")
+        self.uplink = None
+        self.uplink_info = {}
 
-def disconnect ( target ) :
-
-    try :
-        target.disconnect()
-    except:
-        print("Target wasn't disconnected")
-
-
-
-
+    def disconnect_all(self):
+        if self.uplink:
+            print("[SHUTDOWN] A desconectar do Uplink...")
+            try:
+                self.uplink.disconnect()
+            except:
+                pass
