@@ -1,4 +1,5 @@
 import simplepyble
+from scan import makeScan
 
 def connect () :
 
@@ -14,7 +15,7 @@ def connect () :
     # Escolher adaptador a ser usado
     print("Chose and adapter:\n")
     for i, adapter in enumerate(adapters) :
-        print(f"{i}: {adapter.identifier()} [{adapter.address()})
+        print(f"{i}: {adapter.identifier()} [{adapter.address()}]")
     
     adapter = adapters[( int( input("Enter choise:") ) )]
 
@@ -23,7 +24,7 @@ def connect () :
 
     print("Chose target:\n ")
     for i, target in enumerate(targets) :
-        print(f"{i}: {target.identifier()} [{target.address()})
+        print(f"{i}: {target.identifier()} [{target.address()}]")
 
     target = targets[( int( input("Enter choise: ") ) )]
 
@@ -39,12 +40,7 @@ def connect () :
     return target
 
 def disconnect ( target ) :
-
     try :
         target.disconnect()
     except:
         print("Target wasn't disconnected")
-
-
-
-
