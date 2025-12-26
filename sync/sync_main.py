@@ -4,7 +4,7 @@ import asyncio
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../support/')))
 
 from common.advertiser import BLEAdvertiser
 from common.manageConnections import ConnectionManager
