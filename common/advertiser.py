@@ -1,106 +1,131 @@
-import asyncio
-from bless import (
-    BlessServer,
-    BlessGATTCharacteristic,
-    GATTCharacteristicProperties,
-    GATTAttributePermissions
-)
+import dbus
+import dbus.mainloop.glib
+import dbus.service
+from gi.repository import GLib
+
+# Constantes DBus
+BLUEZ_SERVICE_NAME = 'org.bluez'
+LE_ADVERTISING_MANAGER_IFACE = 'org.bluez.LEAdvertisingManager1'
+DBUS_OM_IFACE = 'org.freedesktop.DBus.ObjectManager'
+DBUS_PROP_IFACE = 'org.freedesktop.DBus.Properties'
+LE_ADVERTISEMENT_IFACE = 'org.bluez.LEAdvertisement1'
 
 SIC_SERVICE_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CD"
-SIC_CHAR_UUID    = "51FF12C6-1360-44E9-9577-081E200C0514" 
 
-MANUFACTURER_ID = 0xFFFF
+class InvalidArgsException(dbus.exceptions.DBusException):
+    _dbus_error_name = 'org.freedesktop.DBus.Error.InvalidArgs'
+
+class TestAdvertisement(dbus.service.Object):
+    PATH_BASE = '/org/bluez/example/advertisement'
+
+    def __init__(self, bus, index, advertising_type, local_name, hops):
+        self.path = self.PATH_BASE + str(index)
+        self.bus = bus
+        self.ad_type = advertising_type
+        self.local_name = local_name
+        self.service_uuids = [SIC_SERVICE_UUID]
+        self.manufacturer_data = dbus.Dictionary({}, signature='qv')
+        
+        # Dados do Fabricante com Hops (Key=0xFFFF)
+        # Nota: Usamos dbus.UInt16 para a chave ser explicita
+        self.manufacturer_data[0xFFFF] = dbus.Array([0xFF, 0xFF, hops], signature='y')
+        
+        self.include_tx_power = True
+
+        dbus.service.Object.__init__(self, bus, self.path)
+
+    def get_properties(self):
+        properties = dict()
+        
+        # --- CORREÇÃO DE TIPOS EXPLICITOS ---
+        properties['Type'] = dbus.String(self.ad_type)
+        
+        if self.local_name:
+            properties['LocalName'] = dbus.String(self.local_name)
+        
+        if self.service_uuids:
+            properties['ServiceUUIDs'] = dbus.Array(self.service_uuids, signature='s')
+            
+        if self.manufacturer_data:
+            properties['ManufacturerData'] = dbus.Dictionary(self.manufacturer_data, signature='qv')
+            
+        properties['Discoverable'] = dbus.Boolean(True)
+        properties['Includes'] = dbus.Array(["tx-power"], signature='s')
+        
+        # --- A GRANDE CORREÇÃO AQUI ---
+        # Antes retornavamos: {LE_ADVERTISEMENT_IFACE: properties}
+        # Agora retornamos apenas: properties
+        return properties
+
+    def get_path(self):
+        return dbus.ObjectPath(self.path)
+
+    @dbus.service.method(DBUS_PROP_IFACE, in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface):
+        if interface != LE_ADVERTISEMENT_IFACE:
+            raise InvalidArgsException()
+        # O GetAll ja espera o dicionario plano que corrigimos acima
+        return self.get_properties()
+
+    @dbus.service.method(LE_ADVERTISEMENT_IFACE, in_signature='', out_signature='')
+    def Release(self):
+        print(f'[ADV] {self.path}: Released!')
 
 class NodeAdvertiser:
-    def __init__(self, my_name):
-        self.my_name = my_name
-        self.server = None
-        self.trigger = asyncio.Event()
-        self.current_hops = 99 
-        self.data_callback = None 
-
-    def set_data_callback(self, callback_func):
-        """Define quem processa os dados recebidos (geralmente o ConnectionManager)"""
-        self.data_callback = callback_func
-
-    async def update_hops(self, hops):
-        """
-        Atualiza o número de hops e reinicia o advertising 
-        para que os vizinhos vejam a mudança imediatamente.
-        """
-        if self.current_hops == hops:
-            return 
-
-        self.current_hops = hops
-        print(f"[ADVERTISER] A atualizar Hops para: {self.current_hops}")
-        
-        if self.server and self.server.is_advertising:
-            await self.server.stop_advertising()
-            await self.start_advertising_process()
-
-    async def start_advertising_process(self):
-        """Lógica interna para iniciar o anúncio com os dados corretos"""
-        hops_bytes = int(self.current_hops).to_bytes(1, byteorder='big')
-        
-        m_data = {
-            MANUFACTURER_ID: hops_bytes
-        }
-
-        if await self.server.start_advertising(self.server.services, manufacturer_data=m_data):
-            print(f"[ADVERTISER] A anunciar: {self.my_name} | Hops: {self.current_hops}")
-        else:
-            print(f"[ADVERTISER] Falha ao iniciar advertising.")
+    def __init__(self, advertiser_name, hops=99):
+        self.name = advertiser_name
+        self.hops = hops
+        self.bus = None
+        self.ad = None
+        self.ad_manager = None
+        self.is_running = False
 
     async def run(self):
-        self.server = BlessServer(name=self.my_name, loop=asyncio.get_running_loop())
+        print(f"[ADVERTISER] A configurar GATT Server... (Hops: {self.hops})")
         
-        print(f"[ADVERTISER] A configurar GATT Server...")
-        
-        await self.server.add_new_service(SIC_SERVICE_UUID)
-        
-        char_flags = (
-            GATTCharacteristicProperties.read | 
-            GATTCharacteristicProperties.write | 
-            GATTCharacteristicProperties.notify
-        )
-        permissions = (
-            GATTAttributePermissions.readable | 
-            GATTAttributePermissions.writeable
-        )
-        
-        await self.server.add_new_characteristic(
-            SIC_SERVICE_UUID, 
-            SIC_CHAR_UUID, 
-            char_flags, 
-            b"SIC_NODE_READY", 
-            permissions
-        )
+        # Configurar DBus Loop
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        self.bus = dbus.SystemBus()
 
-        self.server.read_request_func = self.on_read
-        self.server.write_request_func = self.on_write
+        adapter_props = self.find_adapter(self.bus)
+        if not adapter_props:
+            print("[ADVERTISER] Erro: Adaptador não encontrado.")
+            return
 
-        await self.server.start()
-        
-        await self.start_advertising_process()
-        
-        await self.trigger.wait()
-        
-        await self.server.stop()
-        print("[ADVERTISER] Servidor desligado.")
+        adapter_path = adapter_props.object_path
+        self.ad_manager = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path),
+                                         LE_ADVERTISING_MANAGER_IFACE)
 
-    def on_write(self, characteristic, value, **kwargs):
-        """
-        Chamado quando um vizinho (Downlink) nos envia dados.
-        """
-        
-        if self.data_callback:
-            self.data_callback(value)
-        else:
-            print("[ADVERTISER] Aviso: Recebi dados mas não tenho callback configurado!")
+        self.ad = TestAdvertisement(self.bus, 0, 'peripheral', self.name, self.hops)
 
-    def on_read(self, characteristic, **kwargs):
-        """Se alguém tentar ler a característica diretamente"""
-        return str(self.current_hops).encode('utf-8')
+        print(f"[ADVERTISER] A anunciar: {self.name} | Hops: {self.hops}")
+        
+        try:
+            self.ad_manager.RegisterAdvertisement(self.ad.get_path(), {},
+                                                  reply_handler=self.register_ad_callback,
+                                                  error_handler=self.register_ad_error_callback)
+            self.is_running = True
+            
+            # Loop GLib para manter o anuncio vivo
+            loop = GLib.MainLoop()
+            loop.run()
+            
+        except Exception as e:
+            print(f"[ADVERTISER] Falha ao registar: {e}")
 
     def stop(self):
-        self.trigger.set()
+        self.is_running = False
+
+    def register_ad_callback(self):
+        pass 
+
+    def register_ad_error_callback(self, uuid):
+        print(f'[ADVERTISER] Erro ao registar: {uuid}')
+
+    def find_adapter(self, bus):
+        remote_om = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, '/'), DBUS_OM_IFACE)
+        objects = remote_om.GetManagedObjects()
+        for o, props in objects.items():
+            if LE_ADVERTISING_MANAGER_IFACE in props:
+                return bus.get_object(BLUEZ_SERVICE_NAME, o)
+        return None

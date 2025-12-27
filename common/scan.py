@@ -1,53 +1,58 @@
 import simplepyble
-import struct
+import time
 
+# UUID do Serviço do Projeto
+SIC_SERVICE_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CD"
 
-PROJECT_DEVICE_PREFIX = "iPhone de João" # <---- MUDAR AQUI
+# --- ATENÇÃO: ESTE É O MAC DA TUA PEN USB (O NOVO SINK) ---
+TARGET_SINK_MAC = "E0:D3:62:D7:32:17"
 
-MANUFACTURER_ID = 0xFFFF 
-
-def scan_for_candidates(adapter, timeout=3000):
-    """
-    Faz scan e retorna uma lista de dicionários com potenciais uplinks,
-    ordenados pelo critério do projeto (menor hops, melhor sinal).
-    """
-    print(f"[SCAN] A procurar dispositivos '{PROJECT_DEVICE_PREFIX}...' por {timeout}ms")
+def scan_for_candidates(adapter, duration=10000):
+    print(f"[SCAN] A procurar SINK ({TARGET_SINK_MAC}) ou Serviço SIC durante {duration}ms...")
     
-    adapter.scan_for(timeout)
+    try:
+        adapter.scan_for(duration)
+    except Exception as e:
+        print(f"[WARN] Erro ao iniciar scan: {e}")
+        return []
+
     results = adapter.scan_get_results()
-    
     candidates = []
-
+    
     for device in results:
-        name = device.identifier()
-        mac = device.address()
-        rssi = device.rssi()
+        dev_name = device.identifier()
+        dev_addr = device.address()
         
-        if not name.startswith(PROJECT_DEVICE_PREFIX):
-            continue
+        # DEBUG: Ver o que estamos a apanhar
+        print(f"   🔎 Vi: {dev_addr} | Nome: {dev_name} | RSSI: {device.rssi()}")
 
-        m_data = device.manufacturer_data()
-        hops = 99
+        is_valid = False
+        
+        # 1. É o MAC da Pen USB?
+        if dev_addr == TARGET_SINK_MAC:
+            print(f"   🎯 [ALVO] ENCONTREI O SINK PELO MAC!")
+            is_valid = True
+            dev_name = "SINK_DEVICE" 
+            
+        # 2. Tem o serviço SIC?
+        if not is_valid:
+            for s in device.services():
+                if s.uuid() == SIC_SERVICE_UUID:
+                    is_valid = True
+                    break
+        
+        # 3. Tem o nome certo?
+        if not is_valid and ("SIC_" in dev_name or "SINK_" in dev_name):
+            is_valid = True
 
-        if MANUFACTURER_ID in m_data:
-
-            raw_bytes = m_data[MANUFACTURER_ID]
-
-            if len(raw_bytes) > 0:
-                hops = int(raw_bytes[0]) 
-
-        if "SINK" in name:
-            hops = 0
-
-        print(f"[FOUND] {name} ({mac}) | Hops: {hops} | RSSI: {rssi}")
-
-        candidates.append({
-            "device_obj": device,
-            "name": name,
-            "mac": mac,
-            "hops": hops,
-            "rssi": rssi
-        })
+        if is_valid:
+            candidates.append({
+                "device_obj": device,
+                "name": dev_name if dev_name else "UNKNOWN_SIC_NODE",
+                "address": dev_addr,
+                "hops": 0 if (dev_addr == TARGET_SINK_MAC or "SINK" in dev_name) else 99,
+                "rssi": device.rssi()
+            })
+    
     candidates.sort(key=lambda x: (x['hops'], -x['rssi']))
-
     return candidates
