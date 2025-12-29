@@ -5,7 +5,7 @@ import time
 SIC_SERVICE_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CD"
 
 # --- ATENÇÃO: ESTE É O MAC DA TUA PEN USB (O NOVO SINK) ---
-TARGET_SINK_MAC = "E0:D3:62:D7:32:17"
+TARGET_SINK_MAC = "00:C3:0A:BF:66:33"
 
 def scan_for_candidates(adapter, duration=10000):
     print(f"[SCAN] A procurar SINK ({TARGET_SINK_MAC}) ou Serviço SIC durante {duration}ms...")

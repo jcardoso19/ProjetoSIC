@@ -73,9 +73,11 @@ class Characteristic(dbus.service.Object):
         self.service = service
         self.flags = flags
         self.value = []
+        self.notifying = False
+        self.callback = None
         dbus.service.Object.__init__(self, bus, self.path)
 
-    def get_properties(self):
+    def get_properties(self):   
         return {
             'org.bluez.GattCharacteristic1': {
                 'Service': self.service.get_path(),
@@ -87,24 +89,52 @@ class Characteristic(dbus.service.Object):
 
     def get_path(self):
         return dbus.ObjectPath(self.path)
+    
+    def set_callback(self,cb):
+        self.callback = cb
 
     @dbus.service.method('org.bluez.GattCharacteristic1', in_signature='aya{sv}')
     def WriteValue(self, value, options):
         # AQUI É ONDE RECEBEMOS OS DADOS DO NÓ!
         data_str = "".join([chr(b) for b in value])
-        print(f"\n📨 [GATT SERVER] Recebi dados: {len(value)} bytes")
+        data_bytes = bytes(value)
+        if self.callback:
+            self.callback(data_bytes)
+        else:
+            print(f"\n📨 [GATT SERVER] Recebi dados: {len(value)} bytes")
         # Vamos tentar imprimir o texto
         try:
             print(f"   Conteúdo: {data_str}")
         except:
             print(f"   (Binário): {list(value)}")
             
-        # Opcional: Passar para um callback externo se precisarmos
+            
         return
 
     @dbus.service.method('org.bluez.GattCharacteristic1', out_signature='ay')
     def ReadValue(self, options):
         return self.value
+    @dbus.service.method('org.bluez.GattCharacteristic1', in_signature='', out_signature='')
+    def StartNotify(self):
+        if self.notifying:
+            return
+        self.notifying = True
+        print("[GATT] Notificações ativadas pelo cliente")
+    def StopNotify(self):
+        if not self.notifying:
+            return
+        self.notifying = False
+        print("[GATT] Notificações desativadas")
+    def SendNotification(self,data_bytes):
+        if not self.notifying:
+            return
+        value = dbus.Array([b for b in data_bytes], signature='y')
+        self.value = value
+        self.PropertiesChanged('org.bluez.GattCharacteristic1', {'Value': value}, [])
+        
+    @dbus.service.signal('org.freedesktop.DBus.Properties', signature='sa{sv}as')
+    def PropertiesChanged(self, interface, changed, invalidated):                           #envia um sinal que acorda o DBUS
+        pass
 
 # Classe Principal para Iniciar o Serviço
 class GATTServerManager:
@@ -118,7 +148,7 @@ class GATTServerManager:
         # 2. Criar a Característica RX (Write)
         # Flags: 'write' e 'write-without-response' para ser rápido
         self.rx_char = Characteristic(bus, 0, SIC_RX_CHAR_UUID, 
-                                      ['read', 'write', 'write-without-response'], 
+                                      ['read', 'write', 'write-without-response','notify'], 
                                       self.sic_service)
         
         self.sic_service.add_characteristic(self.rx_char)
@@ -128,6 +158,11 @@ class GATTServerManager:
             bus.get_object('org.bluez', '/org/bluez/hci0'), # Força hci1
             'org.bluez.GattManager1'
         )
+    def set_data_callback(self,callback):
+        self.rx_char.set_callback(callback)
+    
+    def send_data(self,data_bytes):
+        self.rx_char.SendNotification(data_bytes)
 
     def register(self):
         print("[GATT] A registar Serviço SIC no BlueZ...")

@@ -41,7 +41,7 @@ class NodeMain:
             print("[WARN] A iniciar em modo INSEGURO.")
 
         # 2. INICIAR CONNECTION MANAGER - *** MUDANÇA AQUI (Index=0 / Interna) ***
-        self.manager = ConnectionManager(my_cert_bytes, my_private_key, adapter_index=1)
+        self.manager = ConnectionManager(my_cert_bytes, my_private_key, adapter_index=0)
         
         # 3. CONFIGURAR ROUTER
         self.router = Router(MY_NID, self.manager)
