@@ -2,3 +2,4 @@ common/venv
 common/__pycache__
 node/__pycache__
 sync/__pycache__
+__pycache__
