@@ -107,8 +107,8 @@ class NodeAdvertiser:
             self.is_running = True
             
             # Loop GLib para manter o anuncio vivo
-            loop = GLib.MainLoop()
-            loop.run()
+            #loop = GLib.MainLoop()
+            #loop.run()
             
         except Exception as e:
             print(f"[ADVERTISER] Falha ao registar: {e}")

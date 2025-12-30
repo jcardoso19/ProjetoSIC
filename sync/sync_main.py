@@ -21,6 +21,13 @@ class SinkMain:
         dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
         self.bus = dbus.SystemBus()
         self.loop = GLib.MainLoop()
+        self.sink_cert_bytes = b"ERRO_SEM_CERT"
+        try:
+            with open("certs/sink.crt", "rb") as f:
+                self.sink_cert_bytes = f.read()
+            print(f"[SEC] Certificado carregado ({len(self.sink_cert_bytes)} bytes).")
+        except Exception as e:
+            print(f"[ERRO] Não encontrei o certificado do sink: {e}")
 
         # 2. INICIAR GATT SERVER (A "Loja")
         # Isto cria o serviço real para o Nó encontrar
@@ -54,8 +61,8 @@ class SinkMain:
 
     def start(self):
         try:
-            while True:
-                time.sleep(5)
+            print("[SINK] Loop principal a correr...")
+            self.loop.run()
         except KeyboardInterrupt:
             print("\n[SINK] A desligar.")
             self.loop.quit()
@@ -64,20 +71,20 @@ class SinkMain:
 
         if not packet: 
             return
-
-        print(f"📥 [SINK] Recebi Tipo={packet.msg_type} de {packet.source_nid}")
         if packet.msg_type == MSG_TYPE_HELLO:
             print("[SEC] Recebi Pedido de Handshake (HELLO)!")
+            
+            cert_payload = self.sink_cert_bytes.decode('utf-8') 
 
             response = Packet(
-            source_nid="SINK",
-            dest_nid=packet.source_nid,
-            msg_type=MSG_TYPE_HELLO_ACK,
-            payload="CERTIFICADO_DO_SINK_AQUI" 
-        )
+                source_nid="SINK",
+                dest_nid=packet.source_nid,
+                msg_type=MSG_TYPE_HELLO_ACK,
+                payload=cert_payload
+            )
+            print("[SINK] A enviar HELLO_ACK")
+            self.gatt_server.send_data(response.to_bytes())
 
-        print("[SINK] A enviar HELLO_ACK...")
-        self.gatt_server.send_data(response.to_bytes())
 if __name__ == "__main__":
     app = SinkMain()
     app.start()
