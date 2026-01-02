@@ -1,256 +1,198 @@
-import sys
-import time
-import os
-import signal
-import threading
-import json
+from common.manageConnections import ConnectionManager
+from node.router import Router
+from node.heartbeat_manager import HeartbeatManager
+from common.security import SecurityManager
+from common.gatt_server import GATTServerManager
+from common.advertiser import NodeAdvertiser
+from common.dtls import DTLSManager
+from common.scan import scan_for_candidates
 import dbus.mainloop.glib
+import threading
+import time
+import asyncio
+import random
+import sys
 from gi.repository import GLib
 
-# --- Módulos do Projeto ---
-from common.advertiser import SICAdvertiser
-from common.gatt_server import Application, SICService
-from common.manageConnections import ConnectionManager
-from common.protocol import Packet, MSG_TYPE_DATA, MSG_TYPE_HEARTBEAT
-from node.heartbeat_manager import HeartbeatManager
-
-# --- Criptografia ---
-from cryptography import x509
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.backends import default_backend
-
-# Configurações
-NODE_ID = "SIC_NODE_01" 
-CERT_PATH = "support/certs/node1.crt"
-KEY_PATH  = "support/certs/node1.key"
-SINK_CERT_PATH = "support/certs/sink.crt"
-
-def load_credentials():
-    print(f"[INIT] A carregar identidade de: {CERT_PATH}")
-    if not os.path.exists(CERT_PATH):
-        sys.exit(f"❌ ERRO: Certificado não encontrado em {CERT_PATH}")
-    with open(CERT_PATH, "rb") as f:
-        cert_bytes = f.read()
-
-    if not os.path.exists(KEY_PATH):
-        sys.exit(f"❌ ERRO: Chave privada não encontrada em {KEY_PATH}")
-    with open(KEY_PATH, "rb") as f:
-        key_data = f.read()
-        priv_key = serialization.load_pem_private_key(
-            key_data, password=None, backend=default_backend()
-        )
-    
-    # Carregar Chave Pública do Sink (Para E2E Encryption)
-    sink_pub_key = None
-    if os.path.exists(SINK_CERT_PATH):
-        with open(SINK_CERT_PATH, "rb") as f:
-            sink_cert = x509.load_pem_x509_certificate(f.read(), default_backend())
-            sink_pub_key = sink_cert.public_key()
-            print("[INIT] 🔒 Certificado do Sink carregado (E2E pronto).")
-    else:
-        print("[WARN] ⚠️ Certificado do Sink não encontrado! E2E falhará.")
-
-    return cert_bytes, priv_key, sink_pub_key
+# --- CONFIGURAÇÃO ---
+MY_NID = "node1"
+CERT_PATH = "certs/node1.crt"
+KEY_PATH = "certs/node1.key"
+ROOT_CA_PATH = "certs/root_ca.crt"
+SINK_NID = "sink"
 
 class NodeApp:
     def __init__(self):
-        self.cert_bytes, self.priv_key, self.sink_pub_key = load_credentials()
-        
-        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-        self.bus = dbus.SystemBus()
-        self.mainloop = GLib.MainLoop()
-
-        # Cliente (Uplink) - Usa adaptador hci1 (index 1) se disponível
-        self.connection_manager = ConnectionManager(
-            cert_bytes=self.cert_bytes, 
-            priv_key=self.priv_key, 
-            adapter_index=1 
-        )
-        self.connection_manager.set_router_callback(self.on_packet_received)
-
-        # Heartbeat Manager
-        self.hb_manager = HeartbeatManager(self.connection_manager, timeout_seconds=16)
-
-        # Servidor (Downlinks)
-        self.app = Application(self.bus)
-        self.service = SICService(self.bus, 0, self.on_packet_received, self.cert_bytes, self.priv_key)
-        self.app.add_service(self.service)
-
-        self.advertiser = SICAdvertiser(self.bus, 0, NODE_ID)
-        
         self.running = True
-        self.routing_table = {} 
-        self.routed_count = 0
-
-    def start(self):
-        print(f"\n🚀 [SYSTEM] {NODE_ID} PRONTO! (Segurança E2E + Heartbeats Ativos)")
-        self.service.register(self.app.get_path())
-        self.advertiser.register()
-        threading.Thread(target=self.manage_uplink, daemon=True).start()
-        threading.Thread(target=self.menu_loop, daemon=True).start()
-        try:
-            self.mainloop.run()
-        except KeyboardInterrupt:
-            self.stop()
-
-    def encrypt_e2e(self, message):
-        """
-        Cria um túnel seguro (DTLS Simulado).
-        """
-        if not self.sink_pub_key:
-            return f"[UNSECURE] {message}"
-
-        # 1. Gerar minha chave temporária
-        eph_priv = ec.generate_private_key(ec.SECP521R1(), default_backend())
-        eph_pub_bytes = eph_priv.public_key().public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        ).decode('utf-8')
-
-        # 2. Derivar chave
-        shared_secret = eph_priv.exchange(ec.ECDH(), self.sink_pub_key)
-        key_e2e = HKDF(
-            algorithm=hashes.SHA256(), length=32, salt=None, info=b'sic-e2e', backend=default_backend()
-        ).derive(shared_secret)
-
-        # 3. Encriptar
-        aes = AESGCM(key_e2e)
-        nonce = os.urandom(12)
-        ciphertext = aes.encrypt(nonce, message.encode('utf-8'), None)
-
-        # 4. Envelope JSON
-        envelope = {
-            "e2e": True,
-            "k": eph_pub_bytes,
-            "n": nonce.hex(),
-            "c": ciphertext.hex()
-        }
-        return json.dumps(envelope)
-
-    def menu_loop(self):
-        """Interface que espera pela conexão antes de mostrar opções"""
-        time.sleep(1) # Esperar logs de arranque
-
-        # --- FASE 1: BLOQUEIO ATÉ CONECTAR ---
-        print("\n⏳ [SYSTEM] A aguardar conexão inicial ao Sink...")
-        while self.running and self.connection_manager.uplink is None:
-            time.sleep(1)
+        self.candidates = []
         
-        print("\n✅ [SYSTEM] Conexão Estabelecida! A carregar menu...")
-        time.sleep(2) # Pausa para ler os logs de sucesso
+        # 1. Segurança
+        try:
+            self.sec_manager = SecurityManager(ROOT_CA_PATH, CERT_PATH, KEY_PATH)
+        except Exception as e:
+            print(f"[ERRO] Falha ao carregar segurança: {e}")
+            sys.exit(1)
 
-        # --- FASE 2: MENU INTERATIVO ---
-        while self.running:
-            # Se a conexão cair, avisar mas não crashar
-            if not self.connection_manager.uplink:
-                 print("\n⚠️ [AVISO] Uplink perdido! A tentar reconectar em segundo plano...")
-                 # Opcional: Bloquear aqui novamente se quiseres ser estrito
-                 while self.running and self.connection_manager.uplink is None:
-                    time.sleep(1)
-                 print("\n✅ [SYSTEM] Reconectado!")
+        # 2. Connection Manager (MUDANÇA: Index 1)
+        self.manager = ConnectionManager(security_manager=self.sec_manager, adapter_index=1)
+        
+        # 3. Router
+        self.router = Router(MY_NID, self.manager, security_manager=self.sec_manager)
+        self.manager.set_router_callback(self.router.process_packet)
+        
+        # 4. DTLS
+        self.dtls_manager = DTLSManager(MY_NID, self.sec_manager, self.router.forward)
+        self.router.set_app_callback(self.dtls_manager.process_packet)
 
-            print("\n" + "="*30)
-            print(f"   MENU PRINCIPAL ({NODE_ID})")
-            print("="*30)
-            print("1. 📊 Ver Estado do Nó")
-            print("2. 📩 Enviar Mensagem para o Sink (E2E)")
-            print("3. 🗺️  Ver Tabela de Routing")
-            print("4. ❌ Sair")
-            print("="*30)
+        # 5. Heartbeat
+        self.hb_monitor = HeartbeatManager(self.manager, timeout_seconds=7)
+        self.router.on_heartbeat = lambda nid: self.hb_monitor.beat_received()
+        
+        # 6. GATT Server
+        self.setup_gatt()
+        
+        # Estado
+        self.handshake_started = False
+        self.my_client_id = random.randint(1000, 9999)
+
+    def setup_gatt(self):
+        def run_gatt_server():
             try:
-                choice = input("Escolha uma opção: ")
-            except: break
+                # dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+                bus = dbus.SystemBus()
+                
+                # --- MUDANÇA CRÍTICA: adapter_index=1 ---
+                gatt_server = GATTServerManager(bus, adapter_index=1)
+                
+                gatt_server.set_data_callback(self.router.process_packet)
+                gatt_server.register()
+                self.router.set_gatt_server(gatt_server)
+                
+                # Advertiser também no 1
+                advertiser = NodeAdvertiser(MY_NID, hops=99, adapter_index=1)
+                
+                loop = GLib.MainLoop()
+                
+                async def start_ad():
+                    await advertiser.run()
+                
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                new_loop.run_until_complete(start_ad())
+                
+                loop.run()
+            except Exception as e:
+                print(f"[GATT] Erro na thread do servidor: {e}")
 
-            if choice == '1': self.print_status()
-            elif choice == '2': self.send_user_message()
-            elif choice == '3': self.print_routing_table()
-            elif choice == '4':
-                os.kill(os.getpid(), signal.SIGINT)
-            else:
-                print("Opção inválida.")
-            time.sleep(0.5)
+        t = threading.Thread(target=run_gatt_server, daemon=True)
+        t.start()
+        time.sleep(2)
+
+    def print_menu(self):
+        print("\n" + "="*40)
+        print(f"   NODE CONTROL: {MY_NID} (Client {self.my_client_id})")
+        print("="*40)
+        print("1. Status")
+        print("2. Scan")
+        print("3. Connect")
+        print("4. Send <msg>")
+        print("5. Block HB <nid>")
+        print("6. Unblock HB <nid>")
+        print("7. Disconnect")
+        print("h. Help")
+        print("q. Quit")
+        print("="*40)
 
     def print_status(self):
-        print("\n--- 📊 ESTADO DO NÓ ---")
-        up = self.connection_manager.uplink
-        if up:
-            name = self.connection_manager.uplink_info.get('name', 'Unknown')
-            hops = self.connection_manager.uplink_info.get('hops', '?')
-            print(f"⬆️  UPLINK: '{name}' (Hops: {hops})")
-            print(f"   💓 Heartbeats Perdidos: {self.hb_manager.missed_count}")
-        else:
-            print(f"⬆️  UPLINK: ❌ Desconectado")
+        print(f"\n--- STATUS ({MY_NID}) ---")
+        up_status = "DISCONNECTED"
+        up_nid = "N/A"
+        if self.manager.uplink:
+            up_status = "CONNECTED"
+            if self.manager.uplink_info:
+                up_nid = self.manager.uplink_info.get('name', 'Unknown')
+        print(f"⬆️  Uplink: {up_status} ({up_nid})")
         
-        # Downlinks
-        sic_char = self.service.characteristics[0]
-        sessions = sic_char.sessions
-        print(f"⬇️  DOWNLINKS: {len(sessions)} conectados.")
+        downlinks = []
+        for nid, conn in self.router.forwarding_table.items():
+            if isinstance(conn, str): 
+                downlinks.append(nid)
+        print(f"⬇️  Downlinks: {downlinks}")
         
-        print(f"cp  STATS: Mensagens Reencaminhadas: {self.routed_count}")
-        print("-----------------------")
+        print(f"💓 Heartbeats Lost: {self.hb_monitor.missed_count}")
+        print(f"📨Routed Messages (Up): {self.router.routed_messages_count}")
+        
+        print("\n📍 Forwarding Table:")
+        for nid, conn in self.router.forwarding_table.items():
+            target = "Uplink" if conn == self.manager.uplink else f"Downlink ({conn})"
+            print(f"   - {nid} -> {target}")
 
-    def print_routing_table(self):
-        print("\n--- 🗺️ TABELA DE ROUTING ---")
-        if not self.routing_table: print("(Vazia)")
-        else:
-            for nid, hop in self.routing_table.items():
-                print(f"📍 Destino: {nid}  --> Via: {hop}")
-        print("----------------------------")
-
-    def send_user_message(self):
-        if not self.connection_manager.uplink:
-            print("❌ ERRO: Não conectado!")
-            return
-        msg = input("✍️  Escreve a mensagem: ")
-        
-        print("🔒 A encriptar End-to-End para o Sink...")
-        encrypted_payload = self.encrypt_e2e(msg)
-        
-        seq = int(time.time()) % 10000 
-        pkt = Packet(NODE_ID, "SINK", encrypted_payload, msg_type=MSG_TYPE_DATA, seq_num=seq)
-        self.connection_manager.send_packet(pkt)
-        print("✅ Pacote Enviado (Hop-by-Hop Seguro + Payload E2E Seguro)!")
-
-    def manage_uplink(self):
+    def run_cli(self):
+        self.print_menu()
         while self.running:
-            if not self.connection_manager.uplink:
-                self.hb_manager.stop()
-                connected = self.connection_manager.find_and_connect_uplink()
-                if connected: self.hb_manager.start()
-            time.sleep(5)
+            try:
+                cmd_line = input("\n> ").strip().split()
+                if not cmd_line: continue
+                cmd = cmd_line[0].lower()
+                
+                if cmd == '1' or cmd == 'status': self.print_status()
+                elif cmd == '2' or cmd == 'scan':
+                    print("[SCAN] Scanning for potential Uplinks...")
+                    self.candidates = scan_for_candidates(self.manager.adapter)
+                    print(f"[SCAN] Found {len(self.candidates)} candidates:")
+                    for idx, c in enumerate(self.candidates):
+                        print(f"   {idx}. {c['name']} (Hops: {c['hops']}, RSSI: {c['rssi']})")
+                elif cmd == '3' or cmd == 'connect':
+                    print("[CLI] Attempting to find and connect to best Uplink...")
+                    if self.manager.uplink:
+                         print("[CLI] Already connected. Disconnecting first...")
+                         self.manager.disconnect_all()
+                         time.sleep(1)
+                    if self.manager.find_and_connect_uplink():
+                         self.hb_monitor.start()
+                         self.handshake_started = False
+                         print("[CLI] ✅ Connected successfully!")
+                    else:
+                         print("[CLI] ❌ Failed to connect.")
+                elif cmd == '4' or cmd == 'send':
+                    msg = " ".join(cmd_line[1:])
+                    if not msg:
+                        print("Use: send <message>")
+                        continue
+                    if SINK_NID in self.dtls_manager.sessions:
+                        self.dtls_manager.send_data(SINK_NID, msg, client_id=self.my_client_id)
+                    else:
+                        print("[CLI] No Secure Session with Sink yet. Wait for handshake.")
+                elif cmd == '5' or cmd == 'block':
+                    if len(cmd_line) < 2: print("Use: block <nid>"); continue
+                    self.router.block_heartbeat(cmd_line[1])
+                elif cmd == '6' or cmd == 'unblock':
+                    if len(cmd_line) < 2: print("Use: unblock <nid>"); continue
+                    self.router.unblock_heartbeat(cmd_line[1])
+                elif cmd == '7' or cmd == 'disconnect':
+                    self.manager.disconnect_all()
+                    self.hb_monitor.stop()
+                    print("[CLI] Disconnected.")
+                elif cmd == 'q' or cmd == 'quit':
+                    self.running = False
+                    self.manager.disconnect_all()
+                    sys.exit(0)
+                elif cmd == 'h' or cmd == 'help': self.print_menu()
+            except Exception as e:
+                print(f"[CLI] Error: {e}")
 
-    def on_packet_received(self, packet, source_connection):
-        if packet.msg_type == MSG_TYPE_HEARTBEAT:
-            self.hb_manager.beat_received()
-            if self.service.characteristics:
-                 self.service.characteristics[0].send_notification(packet)
-            return
-
-        if packet.source_nid != "SINK" and packet.source_nid != "SELF":
-             self.routing_table[packet.source_nid] = "Downlink"
-
-        if packet.dest_nid != NODE_ID and packet.dest_nid != "SELF":
-            self.routed_count += 1
-
-        if packet.msg_type == MSG_TYPE_DATA:
-            print(f"\n📦 [DATA] De {packet.source_nid} (Reencaminhando...)")
-        
-        if packet.dest_nid == "SINK" and self.connection_manager.uplink:
-            self.connection_manager.send_packet(packet)
-
-    def stop(self):
-        print("\n[SYSTEM] A encerrar...")
-        self.hb_manager.stop()
-        self.advertiser.unregister()
-        self.connection_manager.disconnect_all()
-        self.mainloop.quit()
-        sys.exit(0)
+    def main_loop(self):
+        cli_thread = threading.Thread(target=self.run_cli, daemon=True)
+        cli_thread.start()
+        print("[MAIN] Background loop running...")
+        while self.running:
+            if self.manager.uplink and self.manager.session_key:
+                 if not self.handshake_started:
+                     self.dtls_manager.start_handshake(SINK_NID)
+                     self.handshake_started = True
+            time.sleep(1)
 
 if __name__ == "__main__":
-    import signal
-    signal.signal(signal.SIGINT, lambda x,y: sys.exit(0))
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     app = NodeApp()
-    app.start()
+    app.main_loop()

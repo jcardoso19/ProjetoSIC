@@ -1,35 +1,10 @@
 import dbus
 import dbus.service
 import dbus.mainloop.glib
-from gi.repository import GLib
-import json
-import sys
-import os
-import threading
-import array
 
-# Criptografia
-from cryptography import x509
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-from common.protocol import Packet, MSG_TYPE_HELLO, MSG_TYPE_KEY_EXCHANGE, MSG_TYPE_DATA, MSG_TYPE_HEARTBEAT
-
-BLUEZ_SERVICE_NAME = 'org.bluez'
-LE_ADVERTISING_MANAGER_IFACE = 'org.bluez.LEAdvertisingManager1'
-DBUS_OM_IFACE = 'org.freedesktop.DBus.ObjectManager'
-DBUS_PROP_IFACE = 'org.freedesktop.DBus.Properties'
-LE_ADVERTISEMENT_IFACE = 'org.bluez.LEAdvertisement1'
-GATT_MANAGER_IFACE = 'org.bluez.GattManager1'
-GATT_SERVICE_IFACE = 'org.bluez.GattService1'
-GATT_CHRC_IFACE = 'org.bluez.GattCharacteristic1'
-
-# UUIDs do Projeto
+# --- CONFIGURAÇÃO UUIDs ---
 SIC_SERVICE_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CD"
-SIC_CHAR_UUID    = "51FF12C6-1360-44E9-9577-081E200C0514"
+SIC_RX_CHAR_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CE"
 
 class InvalidArgsException(dbus.exceptions.DBusException):
     _dbus_error_name = 'org.freedesktop.DBus.Error.InvalidArgs'
@@ -145,163 +120,102 @@ class Characteristic(dbus.service.Object):
 
     def get_path(self):
         return dbus.ObjectPath(self.path)
+    
+    def set_callback(self,cb):
+        self.callback = cb
 
-    @dbus.service.method(GATT_CHRC_IFACE, in_signature='a{sv}', out_signature='ay')
+    @dbus.service.method('org.bluez.GattCharacteristic1', in_signature='aya{sv}')
+    def WriteValue(self, value, options):
+        data_str = "".join([chr(b) for b in value])
+        data_bytes = bytes(value)
+        
+        device_mac = "UNKNOWN"
+        device_path = options.get('device', None)
+        if device_path:
+            try:
+                device_mac = str(device_path).split("dev_")[-1].replace('_', ':')
+            except:
+                pass
+
+        if self.callback:
+            self.callback(data_bytes, device_mac)
+        else:
+            print(f"\n📨 [GATT SERVER] Recebi dados de {device_mac}: {len(value)} bytes")
+        return
+
+    @dbus.service.method('org.bluez.GattCharacteristic1', out_signature='ay')
     def ReadValue(self, options):
         return self.value
 
-    @dbus.service.method(GATT_CHRC_IFACE, in_signature='aya{sv}')
-    def WriteValue(self, value, options):
-        pass
-
-    @dbus.service.method(GATT_CHRC_IFACE)
+    @dbus.service.method('org.bluez.GattCharacteristic1', in_signature='', out_signature='')
     def StartNotify(self):
-        pass
-
-    @dbus.service.method(GATT_CHRC_IFACE)
-    def StopNotify(self):
-        pass
-
-# --- IMPLEMENTAÇÃO DO SIC ---
-
-class SICCharacteristic(Characteristic):
-    def __init__(self, bus, index, service, app_callback, cert_bytes=None, priv_key=None):
-        Characteristic.__init__(self, bus, index, SIC_CHAR_UUID, ['read', 'write', 'notify'], service)
-        self.app_callback = app_callback
-        self.notifying = False
-        
-        # Credenciais
-        self.cert_bytes = cert_bytes
-        self.priv_key = priv_key
-        
-        # Gestão de Sessões
-        self.sessions = {}
-        
-        self.root_ca = self._load_root_ca()
-
-    def _load_root_ca(self):
-        candidates = ["certs/root_ca.crt", "support/certs/root_ca.crt", "../certs/root_ca.crt"]
-        for path in candidates:
-            if os.path.exists(path):
-                try:
-                    with open(path, "rb") as f:
-                        return x509.load_pem_x509_certificate(f.read(), default_backend())
-                except:
-                    pass
-        return None
-
-    def _get_device_mac(self, device_path):
-        return device_path.split('_')[-1].replace('_', ':')
-
-    def WriteValue(self, value, options):
-        try:
-            data_bytes = bytes(value)
-            packet = Packet.from_bytes(data_bytes)
-            if not packet: return
-
-            device_path = options.get('device')
-            if not device_path: return
-            
-            if device_path not in self.sessions:
-                self.sessions[device_path] = {'session_key': None}
-
-            session = self.sessions[device_path]
-            src_mac = self._get_device_mac(device_path)
-
-            # --- HANDSHAKE ---
-            if packet.msg_type == MSG_TYPE_HELLO:
-                print(f"[SEC] 📩 Recebido HELLO de {src_mac}")
-                try:
-                    client_cert = x509.load_pem_x509_certificate(packet.payload.encode('utf-8'), default_backend())
-                    if self.root_ca:
-                        self.root_ca.public_key().verify(
-                            client_cert.signature,
-                            client_cert.tbs_certificate_bytes,
-                            ec.ECDSA(hashes.SHA256())
-                        )
-                    
-                    session['peer_pub_key'] = client_cert.public_key()
-                    
-                    if self.cert_bytes:
-                        reply = Packet("SERVER", src_mac, self.cert_bytes.decode('utf-8'), msg_type=MSG_TYPE_HELLO)
-                        self.send_notification(reply)
-                    
-                except Exception as e:
-                    print(f"[SEC] ❌ Erro ao validar cliente: {e}")
-                    del self.sessions[device_path]
-
-            elif packet.msg_type == MSG_TYPE_KEY_EXCHANGE:
-                print(f"[SEC] 📩 Recebido KEY_EXCHANGE de {src_mac}")
-                if 'peer_pub_key' not in session: return
-
-                try:
-                    # Verificar assinatura do Handshake (Integridade)
-                    session['peer_pub_key'].verify(
-                        bytes.fromhex(packet.mac),
-                        packet.get_bytes_for_signing(),
-                        ec.ECDSA(hashes.SHA256())
-                    )
-                    
-                    peer_ephemeral = serialization.load_pem_public_key(
-                        packet.payload.encode('utf-8'), default_backend()
-                    )
-                    
-                    my_ephemeral_priv = ec.generate_private_key(ec.SECP521R1(), default_backend())
-                    shared_secret = my_ephemeral_priv.exchange(ec.ECDH(), peer_ephemeral)
-                    
-                    session_key = HKDF(
-                        algorithm=hashes.SHA256(), length=32, salt=None, info=b'sic-protocol-v1', backend=default_backend()
-                    ).derive(shared_secret)
-                    
-                    session['session_key'] = session_key
-                    print(f"[SEC] 🔐 SESSÃO ENCRIPTADA ESTABELECIDA COM {src_mac}!")
-                    
-                    my_pub_bytes = my_ephemeral_priv.public_key().public_bytes(
-                        encoding=serialization.Encoding.PEM,
-                        format=serialization.PublicFormat.SubjectPublicKeyInfo
-                    ).decode('utf-8')
-                    
-                    reply = Packet("SERVER", src_mac, my_pub_bytes, msg_type=MSG_TYPE_KEY_EXCHANGE)
-                    if self.priv_key:
-                        sig = self.priv_key.sign(reply.get_bytes_for_signing(), ec.ECDSA(hashes.SHA256()))
-                        reply.mac = sig.hex()
-                        self.send_notification(reply)
-                        
-                except Exception as e:
-                    print(f"[SEC] ❌ Falha no Key Exchange: {e}")
-
-            # --- DADOS ENCRIPTADOS ---
-            else:
-                if not session.get('session_key'):
-                    print(f"[SEC] ⛔ Ignorado pacote de {src_mac} (Sem Sessão).")
-                    return
-                
-                # Tentar Desencriptar
-                if packet.decrypt(session['session_key']):
-                    # Se decrypt funcionar, o payload agora é o texto original
-                    if self.app_callback:
-                        self.app_callback(packet, device_path)
-                else:
-                    print(f"[SEC] ⚠️ ERRO DE DESENCRIPTAÇÃO de {src_mac}!")
-
-        except Exception as e:
-            print(f"[GATT] Erro geral: {e}")
-
-    def send_notification(self, packet):
-        """Envia pacote (já encriptado pelo Manager/App se necessário)"""
-        if not self.notifying: return
-        data = packet.to_bytes()
-        self.PropertiesChanged(GATT_CHRC_IFACE, {'Value': dbus.ByteArray(data)}, [])
-
-    def StartNotify(self):
-        print("[GATT] 🔔 Notificações ativas.")
+        if self.notifying: return
         self.notifying = True
+        print("[GATT] Notificações ativadas pelo cliente")
 
     def StopNotify(self):
-        print("[GATT] 🔕 Notificações paradas.")
+        if not self.notifying: return
         self.notifying = False
+        print("[GATT] Notificações desativadas")
 
-class SICService(Service):
-    def __init__(self, bus, index, app_callback, cert_bytes, priv_key):
-        Service.__init__(self, bus, index, SIC_SERVICE_UUID, True)
-        self.add_characteristic(SICCharacteristic(bus, 0, self, app_callback, cert_bytes, priv_key))
+    def SendNotification(self,data_bytes):
+        if not self.notifying: return
+        value = dbus.Array([b for b in data_bytes], signature='y')
+        self.value = value
+        self.PropertiesChanged('org.bluez.GattCharacteristic1', {'Value': value}, [])
+        
+    @dbus.service.signal('org.freedesktop.DBus.Properties', signature='sa{sv}as')
+    def PropertiesChanged(self, interface, changed, invalidated):
+        pass
+
+# --- CLASSE CORRIGIDA ---
+class GATTServerManager:
+    # Agora aceita adapter_index
+    def __init__(self, bus, adapter_index=0):
+        self.bus = bus
+        self.app = Application(bus)
+        
+        # 1. Criar o Serviço SIC
+        self.sic_service = Service(bus, 0, SIC_SERVICE_UUID, True)
+        
+        # 2. Criar a Característica RX
+        self.rx_char = Characteristic(bus, 0, SIC_RX_CHAR_UUID, 
+                                      ['read', 'write', 'write-without-response','notify'], 
+                                      self.sic_service)
+        
+        self.sic_service.add_characteristic(self.rx_char)
+        self.app.add_service(self.sic_service)
+        
+        # A MUDANÇA ESTÁ AQUI: Usa o índice correto (hci0 ou hci1)
+        adapter_path = f'/org/bluez/hci{adapter_index}'
+        
+        try:
+            self.service_manager = dbus.Interface(
+                bus.get_object('org.bluez', adapter_path),
+                'org.bluez.GattManager1'
+            )
+        except Exception as e:
+            print(f"[GATT] ERRO CRÍTICO: Não consegui aceder ao adaptador {adapter_path}: {e}")
+
+    def set_data_callback(self,callback):
+        self.rx_char.set_callback(callback)
+    
+    def send_data(self,data_bytes):
+        self.rx_char.SendNotification(data_bytes)
+
+    def register(self):
+        print("[GATT] A registar Serviço SIC no BlueZ...")
+        try:
+            self.service_manager.RegisterApplication(
+                self.app.get_path(), {},
+                reply_handler=self.register_callback,
+                error_handler=self.register_error_callback
+            )
+        except Exception as e:
+            print(f"[GATT] Falha no registo: {e}")
+
+    def register_callback(self):
+        print("[GATT] ✅ Serviço SIC Registado com sucesso!")
+
+    def register_error_callback(self, error):
+        print(f"[GATT] ❌ Erro ao registar: {error}")

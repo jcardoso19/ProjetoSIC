@@ -7,6 +7,9 @@ MSG_TYPE_DATA = 1
 MSG_TYPE_HEARTBEAT = 2
 MSG_TYPE_HELLO = 3      
 MSG_TYPE_HELLO_ACK = 4   
+MSG_TYPE_E2E_HELLO = 10
+MSG_TYPE_E2E_HELLO_ACK = 11
+MSG_TYPE_E2E_DATA = 12
 MSG_TYPE_KEY_EXCHANGE = 5
 
 class Packet:
@@ -28,6 +31,16 @@ class Packet:
             "seq": self.seq_num,
             "pld": self.payload
         }
+
+    def get_header_bytes(self):
+        """Retorna bytes do cabeçalho (Src, Dst, Type, Seq) para AAD (Authenticated Encryption)"""
+        header = {
+            "src": self.source_nid,
+            "dst": self.dest_nid,
+            "type": self.msg_type,
+            "seq": self.seq_num
+        }
+        return json.dumps(header, sort_keys=True, separators=(',', ':')).encode('utf-8')
 
     def get_bytes_for_signing(self):
         """

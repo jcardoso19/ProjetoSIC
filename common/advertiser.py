@@ -3,7 +3,6 @@ import dbus.service
 import dbus.mainloop.glib
 from gi.repository import GLib
 
-# Constantes DBus
 BLUEZ_SERVICE_NAME = 'org.bluez'
 LE_ADVERTISING_MANAGER_IFACE = 'org.bluez.LEAdvertisingManager1'
 DBUS_OM_IFACE = 'org.freedesktop.DBus.ObjectManager'
@@ -26,6 +25,7 @@ class SICAdvertiser(dbus.service.Object):
         self.local_name = local_name
         self.service_uuids = [SIC_SERVICE_UUID]
         self.manufacturer_data = dbus.Dictionary({}, signature='qv')
+        self.manufacturer_data[0xFFFF] = dbus.Array([0xFF, 0xFF, hops], signature='y')
         self.solicit_uuids = None
         self.service_data = None
         self.include_tx_power = True
@@ -36,6 +36,10 @@ class SICAdvertiser(dbus.service.Object):
     def get_properties(self):
         properties = dict()
         properties['Type'] = dbus.String(self.ad_type)
+        if self.local_name:
+            properties['LocalName'] = dbus.String(self.local_name)
+        if self.service_uuids:
+            properties['ServiceUUIDs'] = dbus.Array(self.service_uuids, signature='s')
         properties['LocalName'] = dbus.String(self.local_name)
         properties['ServiceUUIDs'] = dbus.Array(self.service_uuids, signature='s')
         
@@ -43,6 +47,7 @@ class SICAdvertiser(dbus.service.Object):
             properties['SolicitUUIDs'] = dbus.Array(self.solicit_uuids, signature='s')
         if self.manufacturer_data:
             properties['ManufacturerData'] = dbus.Dictionary(self.manufacturer_data, signature='qv')
+        properties['Discoverable'] = dbus.Boolean(True)
         if self.service_data:
             properties['ServiceData'] = dbus.Dictionary(self.service_data, signature='sv')
         
@@ -64,19 +69,49 @@ class SICAdvertiser(dbus.service.Object):
     def Release(self):
         print(f'[ADV] {self.path}: Released!')
 
+class NodeAdvertiser:
+    # MUDANÇA: Aceita adapter_index no init
+    def __init__(self, advertiser_name, hops=99, adapter_index=0):
+        self.name = advertiser_name
+        self.hops = hops
+        self.adapter_index = adapter_index
+        self.bus = None
+        self.ad = None
+        self.ad_manager = None
+        self.is_running = False
+
+    async def run(self):
+        target_adapter = f"hci{self.adapter_index}"
+        print(f"[ADVERTISER] A configurar GATT Server em {target_adapter}... (Hops: {self.hops})")
+        
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        self.bus = dbus.SystemBus()
+
+        adapter_props = self.find_adapter(self.bus, target_adapter)
     def register(self):
         """Regista este Anuncio no BlueZ"""
         print(f"[ADV] A registar anúncio para {self.local_name}...")
         adapter_props = self._find_adapter()
         if not adapter_props:
+            print(f"[ADVERTISER] ERRO CRÍTICO: Não encontrei o adaptador {target_adapter}!")
             print("[ADV] ❌ Erro: Nenhum adaptador Bluetooth encontrado.")
             return
 
         adapter_path = adapter_props.object_path
+        # print(f"[ADVERTISER] Adaptador selecionado: {adapter_path}")
+
+        self.ad_manager = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path),
+                                         LE_ADVERTISING_MANAGER_IFACE)
         ad_manager = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path),
                                     LE_ADVERTISING_MANAGER_IFACE)
 
+        self.ad = TestAdvertisement(self.bus, 0, 'peripheral', self.name, self.hops)
+
         try:
+            self.ad_manager.RegisterAdvertisement(self.ad.get_path(), {},
+                                                  reply_handler=self.register_ad_callback,
+                                                  error_handler=self.register_ad_error_callback)
+            self.is_running = True
             ad_manager.RegisterAdvertisement(self.get_path(), {},
                                              reply_handler=self._register_callback,
                                              error_handler=self._register_error_callback)
@@ -87,16 +122,24 @@ class SICAdvertiser(dbus.service.Object):
         """(Opcional) Remove o registo"""
         pass 
 
+    def register_ad_callback(self):
+        print(f"[ADV] ✅ Anúncio registado com sucesso (hci{self.adapter_index})")
     def _register_callback(self):
         print('[ADV] ✅ Anúncio registado com sucesso (Visível para outros nós).')
 
     def _register_error_callback(self, error):
         print(f'[ADV] ❌ Erro no registo: {error}')
 
+    def find_adapter(self, bus, target_name):
+        remote_om = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, '/'), DBUS_OM_IFACE)
     def _find_adapter(self):
         remote_om = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE_NAME, '/'), DBUS_OM_IFACE)
         objects = remote_om.GetManagedObjects()
+        
+        # Procura o adaptador específico (ex: /org/bluez/hci1)
         for o, props in objects.items():
+            if LE_ADVERTISING_MANAGER_IFACE in props and f"/{target_name}" in o:
+                return bus.get_object(BLUEZ_SERVICE_NAME, o)
             if LE_ADVERTISING_MANAGER_IFACE in props:
                 return self.bus.get_object(BLUEZ_SERVICE_NAME, o)
         return None
