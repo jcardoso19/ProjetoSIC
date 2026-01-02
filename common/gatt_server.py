@@ -98,10 +98,20 @@ class Characteristic(dbus.service.Object):
         # AQUI É ONDE RECEBEMOS OS DADOS DO NÓ!
         data_str = "".join([chr(b) for b in value])
         data_bytes = bytes(value)
+        
+        device_path = options.get('device', None)
+        device_mac = "UNKNOWN"
+        if device_path:
+            # device_path ex: /org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF
+            try:
+                device_mac = str(device_path).split("dev_")[-1].replace('_', ':')
+            except:
+                pass
+
         if self.callback:
-            self.callback(data_bytes)
+            self.callback(data_bytes, device_mac)
         else:
-            print(f"\n📨 [GATT SERVER] Recebi dados: {len(value)} bytes")
+            print(f"\n📨 [GATT SERVER] Recebi dados de {device_mac}: {len(value)} bytes")
         # Vamos tentar imprimir o texto
         try:
             print(f"   Conteúdo: {data_str}")

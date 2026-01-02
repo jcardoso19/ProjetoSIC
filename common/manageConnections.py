@@ -3,22 +3,22 @@ import time
 import threading
 import os
 from common.scan import scan_for_candidates
-from common.protocol import Packet, MSG_TYPE_HELLO, MSG_TYPE_DATA
+from common.protocol import Packet, MSG_TYPE_HELLO, MSG_TYPE_DATA, MSG_TYPE_HELLO_ACK
 
 # UUIDs do Projeto
 SIC_SERVICE_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CD"
 SIC_CHAR_UUID    = "51FF12C6-1360-44E9-9577-081E200C0514"
 
 class ConnectionManager:
-    def __init__(self, cert_bytes=None, priv_key=None, adapter_index=0):
-        self.cert_bytes = cert_bytes
-        self.priv_key = priv_key
+    def __init__(self, security_manager=None, adapter_index=0):
+        self.security_manager = security_manager
         
         # Escolhe o adaptador com base no índice pedido (0=Interno, 1=USB)
         self.adapter = self._get_adapter(adapter_index)
         self.uplink = None 
         self.uplink_info = {}
         self.router_callback = None
+        self.session_key = None # Chave de sessão negociada
 
     def set_router_callback(self, callback):
         """Define quem recebe os pacotes de dados (geralmente o Router)"""
@@ -118,16 +118,30 @@ class ConnectionManager:
 
     def _start_handshake(self):
         """Envia o certificado logo após a conexão"""
-        if not self.cert_bytes:
-            print("[SEC] Sem certificado carregado! Saltando Handshake.")
+        if not self.security_manager:
+            print("[SEC] Sem SecurityManager! Saltando Handshake.")
             return
 
         print("[HANDSHAKE] A enviar HELLO com Certificado...")
+        
+        # Obtém bytes do certificado local
+        # Assumimos que o security_manager tem acesso ao certificado carregado
+        # Vamos adicionar um método ou acessar propriedade. O security_manager tem 'local_cert_bytes' (vamos ter de garantir isto)
+        # Como o security_manager no meu código anterior não guardava os bytes crus, vou ler do ficheiro ou adicionar propriedade.
+        # Melhor: O security_manager pode ter um método 'get_local_cert_bytes()'
+        
+        # Vou assumir que o security_manager foi inicializado com um 'local_cert_pem'
+        try:
+             cert_pem = self.security_manager.local_cert_pem
+        except:
+             print("[SEC] Erro: Certificado local não disponível no SecurityManager.")
+             return
+
         hello_pkt = Packet(
             source_nid="SELF", # O Router depois corrige isto
             dest_nid="UPLINK",
             msg_type=MSG_TYPE_HELLO,
-            payload=self.cert_bytes.decode('utf-8') # Assume PEM format
+            payload=cert_pem.decode('utf-8') 
         )
         self.send_packet(hello_pkt)
 
@@ -145,6 +159,42 @@ class ConnectionManager:
 
     def _on_data_received_from_uplink(self, data_bytes):
         """Callback chamada quando o Uplink nos manda dados"""
+        
+        # Tenta interceptar pacotes de Handshake (HELLO_ACK)
+        try:
+            packet = Packet.from_bytes(data_bytes)
+            if packet and packet.msg_type == MSG_TYPE_HELLO_ACK:
+                print("[HANDSHAKE] Recebido HELLO_ACK do Uplink.")
+                
+                if not self.security_manager:
+                    print("[SEC] Erro: Recebi HELLO_ACK mas não tenho SecurityManager.")
+                    return
+
+                # Payload é o certificado do Uplink (PEM String)
+                peer_cert_pem = packet.payload.encode('utf-8')
+                
+                try:
+                    # 1. Verificar Certificado
+                    peer_pub_key = self.security_manager.verify_certificate(peer_cert_pem)
+                    print("[SEC] Certificado do Uplink validado com sucesso!")
+                    
+                    # 2. Derivar Chave de Sessão
+                    self.session_key = self.security_manager.derive_session_key(
+                        self.security_manager.local_private_key,
+                        peer_pub_key
+                    )
+                    print(f"[SEC] 🔐 Chave de Sessão Uplink Negociada: {self.session_key.hex()[:10]}...")
+                    
+                except Exception as e:
+                    print(f"[SEC] FALHA NO HANDSHAKE: {e}")
+                    self.disconnect_all()
+                
+                return # NÃO passa para o Router
+                
+        except Exception as e:
+            print(f"[DEBUG] Erro ao analisar pacote interno: {e}")
+
+        # Se não for handshake, passa para o Router
         if self.router_callback:
             self.router_callback(data_bytes, source_connection=self.uplink)
 
@@ -153,6 +203,7 @@ class ConnectionManager:
         print("\n⚡ [ALERT] UPLINK PERDIDO!")
         self.uplink = None
         self.uplink_info = {}
+        self.session_key = None # Limpa a chave
 
     def disconnect_all(self):
         """Desconecta de forma limpa"""
