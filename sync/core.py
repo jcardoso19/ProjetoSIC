@@ -2,7 +2,7 @@ from common.security import SecurityManager
 from common.dtls import DTLSManager
 from common.gatt_server import GATTServerManager
 from common.advertiser import NodeAdvertiser
-from common.protocol import Packet, MSG_TYPE_HEARTBEAT, MSG_TYPE_DATA, MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK
+from common.protocol import Packet, MSG_TYPE_HEARTBEAT
 from node.router import Router
 import dbus.mainloop.glib
 import threading
@@ -21,33 +21,30 @@ class SinkCore:
     def __init__(self):
         print(f"[*] A iniciar Sink Core ({SINK_NID})...")
         
-        # 1. Segurança
         self.sec_manager = SecurityManager(ROOT_CA_PATH, CERT_PATH, KEY_PATH)
         
-        # 2. Connection Manager (Sink não tem Uplink)
         from common.manageConnections import ConnectionManager
-        self.conn_manager = ConnectionManager(security_manager=self.sec_manager) 
+        # MUDANÇA: adapter_index=0 para o Sink
+        self.conn_manager = ConnectionManager(security_manager=self.sec_manager, adapter_index=0) 
         
-        # 3. Router
         self.router = Router(SINK_NID, self.conn_manager, security_manager=self.sec_manager)
         
-        # 4. GATT Server & Advertiser
         self.bus = dbus.SystemBus()
-        self.gatt_server = GATTServerManager(self.bus)
+        
+        # --- MUDANÇA CRÍTICA: adapter_index=0 ---
+        self.gatt_server = GATTServerManager(self.bus, adapter_index=0)
+        
         self.gatt_server.set_data_callback(self.router.process_packet)
         self.router.set_gatt_server(self.gatt_server)
         
-        self.advertiser = NodeAdvertiser(SINK_NID, hops=0)
+        # Advertiser também no 0
+        self.advertiser = NodeAdvertiser(SINK_NID, hops=0, adapter_index=0)
         
-        # 5. Heartbeat
         self.hb_running = False
         self.hb_thread = None
 
-        # 6. DTLS (E2E Security)
         self.dtls_manager = DTLSManager(SINK_NID, self.sec_manager, self.router.forward)
         self.router.set_app_callback(self.dtls_manager.process_packet)
-        
-        # 7. Services
         self.dtls_manager.register_service("Inbox", self.on_inbox_message)
 
     def on_inbox_message(self, source_nid, client_id, message):
@@ -56,18 +53,12 @@ class SinkCore:
         print("-" * 40)
 
     def start_background(self):
-        # Iniciar GATT
         self.gatt_server.register()
-        
-        # Iniciar Advertiser (Async/Thread)
         self._start_advertiser()
-        
-        # Iniciar Heartbeat Broadcast
         self._start_heartbeat()
         
         print("[SINK] ✅ Sistema Operacional. A aguardar conexões...")
         
-        # Loop Principal (GLib para DBus) em Thread
         def run_loop():
             loop = GLib.MainLoop()
             try:
@@ -96,12 +87,9 @@ class SinkCore:
         seq = 0
         while self.hb_running:
             time.sleep(5)
-            # Broadcast Heartbeat
             if not self.router.downlink_keys:
                 continue
                 
-            # print(f"💓 [HEARTBEAT] A enviar Broadcast (Seq: {seq})...")
-            
             active_links = list(self.router.downlink_keys.keys())
             
             for neighbor_mac in active_links:
@@ -112,19 +100,14 @@ class SinkCore:
                     payload="ALIVE",
                     seq_num=seq
                 )
-                
-                # Encontrar NID para routing
                 target_nid = None
                 for nid, mac in self.router.forwarding_table.items():
                     if mac == neighbor_mac:
                         target_nid = nid
                         break
-                
                 if target_nid:
                     pkt.dest_nid = target_nid
-                    # O Router.forward vai checar se está bloqueado
                     self.router.forward(pkt)
-            
             seq += 1
 
     def stop(self):
