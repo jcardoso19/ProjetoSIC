@@ -97,9 +97,18 @@ class Router:
             print(f"[ROUTER] 🤝 HELLO de {packet.source_nid}")
             try:
                 child_pub_key = self.security_manager.verify_certificate(packet.payload.encode('utf-8'))
-                self.downlink_keys[source_connection] = self.security_manager.derive_session_key(
+                session_key = self.security_manager.derive_session_key(
                     self.security_manager.local_private_key, child_pub_key
                 )
+                self.downlink_keys[source_connection] = session_key
+                
+                # --- CORREÇÃO: Limpar buffer após derivação da chave para evitar lixo residual ---
+                conn_key = source_connection if isinstance(source_connection, str) else id(source_connection)
+                self.rx_buffers[conn_key] = bytearray()
+                
+                # Reset Sequência para este nó
+                self.last_seq_nums[packet.source_nid] = -1
+                print(f"[SEC] 🔐 Chave de Sessão para {packet.source_nid} derivada.")
                 
                 # Aprender a rota antes de responder
                 self.forwarding_table[packet.source_nid] = source_connection
@@ -151,3 +160,8 @@ class Router:
             pkt = copy.deepcopy(original_packet)
             pkt.dest_nid = next((k for k, v in self.forwarding_table.items() if v == mac_conn), None)
             if pkt.dest_nid: self.forward(pkt)
+
+    def send_message(self, dest_nid, message):
+        """Função para a UI usar (enviar mensagem nova)"""
+        pkt = Packet(self.my_nid, dest_nid, message)
+        self.forward(pkt)
