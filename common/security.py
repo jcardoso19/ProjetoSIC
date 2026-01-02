@@ -24,8 +24,6 @@ class SecurityManager:
     def encrypt_packet(self, session_key, packet):
         """
         Encrypts the packet payload using AES-GCM.
-        Updates packet.payload (Base64 of Nonce+CT) and packet.mac (Base64 of Tag).
-        AAD = packet header.
         """
         if not session_key:
             raise ValueError("Session Key is None")
@@ -46,15 +44,12 @@ class SecurityManager:
         tag = ct_and_tag[-16:]
         ciphertext = ct_and_tag[:-16]
         
-        # Format: Payload = Nonce + Ciphertext (Base64)
-        #         MAC     = Tag (Base64)
         packet.payload = base64.b64encode(nonce + ciphertext).decode('utf-8')
         packet.mac = base64.b64encode(tag).decode('utf-8')
 
     def decrypt_packet(self, session_key, packet):
         """
         Decrypts packet payload. Validates AAD (Header).
-        Returns True if success, False otherwise.
         """
         if not session_key:
             raise ValueError("Session Key is None")
@@ -70,7 +65,7 @@ class SecurityManager:
             nonce = enc_payload[:12]
             ciphertext = enc_payload[12:]
             
-            # Reconstruct for generic API: standard decrypt expects CT+Tag
+            # Reconstruct for generic API
             ct_and_tag = ciphertext + tag
             
             plaintext = aesgcm.decrypt(nonce, ct_and_tag, aad)
@@ -83,13 +78,9 @@ class SecurityManager:
 
     def _load_cert(self, path):
         if not os.path.exists(path):
-            # Fallback for different execution contexts
-            if os.path.exists(f"../{path}"):
-                path = f"../{path}"
-            elif os.path.exists(f"support/{path}"): # Sometimes certs are in support/certs
-                 path = f"support/{path}"
-            else:
-                 raise FileNotFoundError(f"Root CA not found at {path}")
+            if os.path.exists(f"../{path}"): path = f"../{path}"
+            elif os.path.exists(f"support/{path}"): path = f"support/{path}"
+            else: raise FileNotFoundError(f"Root CA not found at {path}")
 
         with open(path, "rb") as f:
             return x509.load_pem_x509_certificate(f.read(), default_backend())
@@ -97,9 +88,7 @@ class SecurityManager:
     def load_private_key(self, path):
         with open(path, "rb") as f:
             return serialization.load_pem_private_key(
-                f.read(),
-                password=None,
-                backend=default_backend()
+                f.read(), password=None, backend=default_backend()
             )
             
     def load_certificate(self, path):
@@ -109,24 +98,18 @@ class SecurityManager:
     def verify_certificate(self, cert_pem_bytes):
         """
         Verifies a PEM encoded certificate against the Root CA.
-        Returns the public key if valid, raises Exception otherwise.
         """
         try:
             cert = x509.load_pem_x509_certificate(cert_pem_bytes, default_backend())
             
-            # Verify signature
+            # --- CORREÇÃO AQUI ---
+            # Chaves EC exigem que se especifique o algoritmo de assinatura (ECDSA)
             self.root_ca_public_key.verify(
                 cert.signature,
                 cert.tbs_certificate_bytes,
-                hashes.SHA256() # Assuming SHA256 was used in pkiGenerator
+                ec.ECDSA(hashes.SHA256())  # <--- ESTA FOI A MUDANÇA
             )
             
-            # Check expiration (simplified)
-            # import datetime
-            # now = datetime.datetime.now(datetime.timezone.utc)
-            # if now < cert.not_valid_before or now > cert.not_valid_after:
-            #    raise Exception("Certificate expired")
-
             return cert.public_key()
         except Exception as e:
             print(f"[SEC] Certificate Verification Failed: {e}")
@@ -138,7 +121,6 @@ class SecurityManager:
         """
         shared_secret = local_private_key.exchange(ec.ECDH(), peer_public_key)
         
-        # Derive a symmetric key (e.g., for AES or HMAC)
         session_key = HKDF(
             algorithm=hashes.SHA256(),
             length=32, # 256 bits
