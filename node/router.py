@@ -72,25 +72,35 @@ class Router:
 
         if packet.msg_type == MSG_TYPE_HEARTBEAT:
             raw_payload = packet.payload.strip().replace('\x00', '')
-            if "ALIVE" in raw_payload:
-                if hasattr(self, 'on_heartbeat'): self.on_heartbeat(packet.source_nid)
-                self.propagate_heartbeat(packet)
-                return
+
             try:
                 hb_data = json.loads(raw_payload)
                 val = hb_data.get("val")
                 sig = hb_data.get("sig")
+                
                 sink_cert = self.security_manager.get_sink_certificate()
-                if sink_cert and val and sig:
+                
+                if not sink_cert:
+                    print(f"[HB] Ignorado: Não tenho certificado do Sink.")
+                elif sink_cert and val and sig:
                     is_valid = self.security_manager.verify_signature_with_cert(sink_cert, val.encode('utf-8'), sig)
+                    
                     if is_valid:
-                        print(f"[HEARTBEAT] ASSINATURA OK (Seq: {val})")
+                        print(f"[HEARTBEAT] ASSINADO (Seq: {val})")
+                        
                         if hasattr(self, 'on_heartbeat'): self.on_heartbeat(packet.source_nid)
                         self.propagate_heartbeat(packet)
                     else:
-                        print("[SEC] PERIGO: Assinatura FALHOU!")
-            except: pass
-            return 
+                        print(f"[SEC] PERIGO: Assinatura INVÁLIDA para Seq {val}!")
+                else:
+                    print(f"[HB] Formato inválido (Falta val ou sig). Payload: {raw_payload}")
+
+            except json.JSONDecodeError:
+                print(f"[HB] Erro JSON. Recebi: '{raw_payload}'")
+            except Exception as e:
+                print(f"[HB] Erro Crítico: {e}")
+            
+            return
             
         if packet.dest_nid == self.my_nid:
             if self.app_callback: self.app_callback(packet)
