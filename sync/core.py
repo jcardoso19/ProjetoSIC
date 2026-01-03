@@ -9,6 +9,7 @@ import threading
 import time
 import asyncio
 import sys
+import json
 from gi.repository import GLib
 
 # --- CONFIGURAÇÃO ---
@@ -88,6 +89,20 @@ class SinkCore:
         while self.hb_running:
             time.sleep(5)
             if not self.router.downlink_keys:
+                continue
+            val_str = str(seq)
+            
+            try:
+                signature = self.sec_manager.sign_data(val_str.encode('utf-8'))
+                
+                payload_dict = {
+                    "val": val_str,
+                    "sig": signature
+                }
+                payload_json = json.dumps(payload_dict)
+                
+            except Exception as e:
+                print(f"[ERRO] Falha ao assinar Heartbeat: {e}")
                 continue
                 
             active_links = list(self.router.downlink_keys.keys())

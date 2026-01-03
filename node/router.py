@@ -72,9 +72,11 @@ class Router:
             self.handle_handshake(packet, source_connection)
             return
 
+
         if self.security_manager:
             session_key = self._get_key_for_connection(source_connection)
             if not session_key or not self.security_manager.decrypt_packet(session_key, packet):
+                print(f"[SEC] Pacote rejeitado: Falha na desencriptação de {packet.source_nid}")
                 return
             
             last_seq = self.last_seq_nums.get(packet.source_nid, -1)
@@ -84,11 +86,36 @@ class Router:
         if packet.source_nid not in self.forwarding_table:
             self.forwarding_table[packet.source_nid] = source_connection
 
+
+        if packet.msg_type == MSG_TYPE_HEARTBEAT:
+            try:
+                hb_data = json.loads(packet.payload)
+                val = hb_data["val"]
+                sig = hb_data["sig"]
+                
+                sink_cert = self.security_manager.get_sink_certificate()
+                
+                if sink_cert:
+                    is_valid = self.security_manager.verify_signature_with_cert(
+                        sink_cert, val.encode('utf-8'), sig
+                    )
+                    
+                    if is_valid:
+                        if hasattr(self, 'on_heartbeat'):
+                            self.on_heartbeat(packet.source_nid)
+                        
+                        self.propagate_heartbeat(packet)
+                    else:
+                        print("⛔ [SEC] PERIGO: Heartbeat com assinatura falsa!")
+                else:
+                    print("⚠️ [HEARTBEAT] Sem certificado do Sink para validar.")
+
+            except Exception as e:
+                print(f"[ERR] Heartbeat malformado: {e}")
+            
+            return 
         if packet.dest_nid == self.my_nid:
             if self.app_callback: self.app_callback(packet)
-            if packet.msg_type == MSG_TYPE_HEARTBEAT and hasattr(self, 'on_heartbeat'):
-                self.on_heartbeat(packet.source_nid)
-                self.propagate_heartbeat(packet)
         else:
             self.forward(packet)
 
