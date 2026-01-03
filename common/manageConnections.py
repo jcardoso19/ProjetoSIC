@@ -134,19 +134,24 @@ class ConnectionManager:
             del self.rx_buffer[:4 + msg_len]
             self._handle_complete_packet(packet_bytes)
 
+    # No ficheiro common/manageConnections.py
+
     def _handle_complete_packet(self, data_bytes):
         try:
             packet = Packet.from_bytes(data_bytes)
             if packet and packet.msg_type == MSG_TYPE_HELLO_ACK:
-                print("[HANDSHAKE] 📩 Recebido HELLO_ACK do Sink.")
+                print(f"[HANDSHAKE] 📩 Recebido HELLO_ACK de {packet.source_nid}")
+                
+                # Derivar a chave IMEDIATAMENTE
                 peer_cert_pem = packet.payload.encode('utf-8')
                 peer_pub_key = self.security_manager.verify_certificate(peer_cert_pem)
                 self.session_key = self.security_manager.derive_session_key(
                     self.security_manager.local_private_key, peer_pub_key
                 )
-                time.sleep(0.1)
+                
+                # A chave TEM de estar ativa antes de sair desta função
                 print(f"[SEC] 🔐 CANAL SEGURO ESTABELECIDO!")
-                return 
+                return
         except: pass
         if self.router_callback:
             self.router_callback(data_bytes, source_connection=self.uplink)

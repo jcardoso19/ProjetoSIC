@@ -104,7 +104,8 @@ class Router:
                 
                 # --- CORREÇÃO: Limpar buffer após derivação da chave para evitar lixo residual ---
                 conn_key = source_connection if isinstance(source_connection, str) else id(source_connection)
-                self.rx_buffers[conn_key] = bytearray()
+                if conn_key in self.rx_buffers:
+                    self.rx_buffers[conn_key] = bytearray()
                 
                 # Reset Sequência para este nó
                 self.last_seq_nums[packet.source_nid] = -1

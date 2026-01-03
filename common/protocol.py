@@ -22,14 +22,24 @@ class Packet:
             data["mac"] = self.mac
         return json.dumps(data).encode('utf-8')
 
+    # No ficheiro common/protocol.py
+
+    # No ficheiro common/protocol.py
+
     def get_header_bytes(self):
-        src_bytes = self.source_nid.encode('utf-8')
-        dst_bytes = self.dest_nid.encode('utf-8')
-        typ_bytes = self.msg_type.encode('utf-8')
-        seq_bytes = self.seq_num.to_bytes(4, byteorder='big')  # 4 bytes fixos
-
-        return src_bytes + dst_bytes + typ_bytes + seq_bytes
-
+        """
+        Retorna os metadados do pacote para servirem de AAD no AES-GCM.
+        Garante que a string seja idêntica à esperada pelo SecurityManager.
+        """
+        # Forçamos o seq_num a ser um inteiro simples para evitar variações
+        try:
+            sequence = int(self.seq_num)
+        except:
+            sequence = 0
+            
+        # Criamos a string separada por pipes, exatamente como no log de debug
+        header_str = f"{self.source_nid}|{self.dest_nid}|{self.msg_type}|{sequence}"
+        return header_str.encode('utf-8')
 
 
     @staticmethod

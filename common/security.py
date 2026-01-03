@@ -31,6 +31,8 @@ class SecurityManager:
         aesgcm = AESGCM(session_key)
         nonce = os.urandom(12)
         aad = packet.get_header_bytes()
+        print(f"[DEBUG-SEC] AAD String: {aad.decode('utf-8')}")
+        print(f"[DEBUG-SEC] AAD Hex: {aad.hex()}")
         
         # Payload must be bytes
         if isinstance(packet.payload, str):
@@ -115,18 +117,16 @@ class SecurityManager:
             print(f"[SEC] Certificate Verification Failed: {e}")
             raise e
 
+    # No ficheiro common/security.py
+
     def derive_session_key(self, local_private_key, peer_public_key):
-        """
-        Performs ECDH and derives a session key using HKDF.
-        """
+        # O exchange deve ser feito sempre desta forma
         shared_secret = local_private_key.exchange(ec.ECDH(), peer_public_key)
         
-        session_key = HKDF(
+        return HKDF(
             algorithm=hashes.SHA256(),
-            length=32, # 256 bits
+            length=32,
             salt=None,
             info=b'sic_protocol_session_key',
             backend=default_backend()
         ).derive(shared_secret)
-        
-        return session_key
