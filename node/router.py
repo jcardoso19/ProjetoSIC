@@ -84,8 +84,11 @@ class Router:
                 if sink_cert and val and sig:
                     is_valid = self.security_manager.verify_signature_with_cert(sink_cert, val.encode('utf-8'), sig)
                     if is_valid:
+                        print(f"[HEARTBEAT] Assinatura do Sink VÁLIDA (Seq: {val})")
                         if hasattr(self, 'on_heartbeat'): self.on_heartbeat(packet.source_nid)
                         self.propagate_heartbeat(packet)
+                    else:
+                        print("[SEC] PERIGO: Heartbeat com assinatura falsa!")
             except: pass
             return 
             
