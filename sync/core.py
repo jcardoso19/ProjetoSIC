@@ -85,6 +85,7 @@ class SinkCore:
         self.hb_thread.start()
 
     def _heartbeat_loop(self):
+        time.sleep(2)
         seq = 0
         while self.hb_running:
             time.sleep(5)

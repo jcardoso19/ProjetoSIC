@@ -22,42 +22,39 @@ class Packet:
             data["mac"] = self.mac
         return json.dumps(data).encode('utf-8')
 
-    # No ficheiro common/protocol.py
-
-    # No ficheiro common/protocol.py
-
     def get_header_bytes(self):
         """
-        Retorna os metadados do pacote para servirem de AAD no AES-GCM.
-        Garante que a string seja idêntica à esperada pelo SecurityManager.
+        Garante AAD consistente para o AES-GCM (string com pipes).
         """
-        # Forçamos o seq_num a ser um inteiro simples para evitar variações
         try:
             sequence = int(self.seq_num)
         except:
             sequence = 0
             
-        # Criamos a string separada por pipes, exatamente como no log de debug
         header_str = f"{self.source_nid}|{self.dest_nid}|{self.msg_type}|{sequence}"
         return header_str.encode('utf-8')
-
 
     @staticmethod
     def from_bytes(data_bytes):
         """
-        Reconstrói um objeto Packet a partir de bytes, com limpeza de ruído 
-        da transmissão Bluetooth.
+        Versão robusta: Ignora erros de descodificação e limpa lixo.
         """
         try:
-            # Converte bytes para string
-            raw_str = data_bytes.decode('utf-8')
+            # 1. Decodificar ignorando bytes inválidos (EVITA O CRASH 0x83)
+            raw_str = data_bytes.decode('utf-8', errors='ignore')
             
-            # --- LIMPEZA DE LIXO ---
-            # Remove caracteres nulos (\x00) e espaços invisíveis que corrompem o JSON
+            # 2. Limpar caracteres nulos e espaços extra
             clean_str = raw_str.strip().replace('\x00', '')
             
-            # Tenta descodificar o JSON limpo
-            data = json.loads(clean_str)
+            # 3. Encontrar o JSON real (ignora lixo antes do '{' e depois do '}')
+            start = clean_str.find('{')
+            end = clean_str.rfind('}')
+            
+            if start == -1 or end == -1:
+                return None
+                
+            json_str = clean_str[start : end + 1]
+            data = json.loads(json_str)
             
             return Packet(
                 source_nid=data.get("src"),
@@ -68,17 +65,15 @@ class Packet:
                 mac=data.get("mac")
             )
         except Exception as e:
-            print(f"[PROTOCOL] Erro ao descodificar: {e}")
+            # Silenciar erros de parsing para não poluir o log
+            # print(f"[PROTOCOL] Erro ignorado: {e}")
             return None
 
-# --- CONSTANTES DE PROTOCOLO (Hop-by-Hop) ---
+# Constantes
 MSG_TYPE_HELLO = "HELLO"
 MSG_TYPE_HELLO_ACK = "HELLO_ACK"
 MSG_TYPE_DATA = "DATA"
 MSG_TYPE_HEARTBEAT = "HEARTBEAT"
-
-# --- CONSTANTES DE PROTOCOLO (End-to-End / DTLS) ---
-# Estas são as que estavam a faltar e causaram o erro
 MSG_TYPE_E2E_HELLO = "E2E_HELLO"
 MSG_TYPE_E2E_HELLO_ACK = "E2E_HELLO_ACK"
-MSG_TYPE_E2E_DATA = "E2E_DATA"
+MSG_TYPE_E2E_DATA = "E2E_DATA"  

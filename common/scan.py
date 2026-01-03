@@ -2,7 +2,7 @@ import simplepyble
 import time
 
 # O TEU MAC FIXO
-TARGET_SINK_MAC = "5C:BA:EF:CC:98:10"
+TARGET_SINK_MAC = "E0:D3:62:D7:32:17"
 
 def scan_for_candidates(adapter, duration=5000):
     print(f"[SCAN] A procurar EXCLUSIVAMENTE o endereço: {TARGET_SINK_MAC}")

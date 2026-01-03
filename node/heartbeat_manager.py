@@ -1,51 +1,63 @@
-import time
 import threading
+import time
 
 class HeartbeatManager:
-    def __init__(self, connection_manager, timeout_seconds=5, max_missed=3):
-        self.connection_manager = connection_manager
-        self.interval = timeout_seconds
-        self.max_missed = max_missed
-        self.missed_count = 0
+    def __init__(self, callback_on_death, interval=5):
+        self.callback_on_death = callback_on_death
+        self.interval = interval
+        self.tolerance = (interval * 0.2) + 2 
         self.running = False
-        self.timer_thread = None
+        self.thread = None
+        self.last_heartbeat_time = time.time()
+        self.missed_count = 0
+        self.MAX_MISSES = 3
 
     def start(self):
-        """Inicia a monitorização"""
-        print("[HEARTBEAT] Monitorização iniciada.")
+        if self.running: return
         self.running = True
+        self.last_heartbeat_time = time.time()
         self.missed_count = 0
-        self._schedule_check()
+        self.thread = threading.Thread(target=self._monitor)
+        self.thread.daemon = True
+        self.thread.start()
+        # print(f"[HEARTBEAT] Monitorização iniciada.")
 
     def stop(self):
         self.running = False
-        if self.timer_thread:
-            self.timer_thread.cancel()
 
-    def _schedule_check(self):
-        if not self.running:
-            return
-        self.timer_thread = threading.Timer(self.interval, self._check_pulse)
-        self.timer_thread.start()
+    def heartbeat_received(self):
+        """Chamado pelo Router quando chega um HB válido"""
+        self.last_heartbeat_time = time.time()
+        
+        # Se recuperou de uma falha, avisa. Se for normal, fica calado.
+        if self.missed_count > 0:
+            print(f"💓 [HEARTBEAT] Recuperado! (Contador zerado)")
+        # else:
+            # print(f"💓 [HEARTBEAT] Recebido. Timer resetado.") # <--- SILENCIADO
+            
+        self.missed_count = 0
 
-    def _check_pulse(self):
-        """Chamado automaticamente quando o tempo acaba"""
-        if not self.running:
-            return
-
-        self.missed_count += 1
-        print(f"⚠️ [HEARTBEAT] Falhou! ({self.missed_count}/{self.max_missed})")
-
-        if self.missed_count >= self.max_missed:
-            print("💀 [HEARTBEAT] UPLINK MORTO! A iniciar desconexão de emergência...")
-            self.connection_manager.on_uplink_lost()
-            self.stop()
-        else:
-
-            self._schedule_check()
-
-    def beat_received(self):
-        """Esta função deve ser chamada quando o Router recebe uma msg do tipo HEARTBEAT"""
-        if self.running:
-            print("💓 [HEARTBEAT] Recebido. Timer resetado.")
-            self.missed_count = 0
+    def _monitor(self):
+        while self.running:
+            time.sleep(1)
+            
+            time_since_last = time.time() - self.last_heartbeat_time
+            expected_misses = 0
+            
+            if time_since_last > (self.interval * 3) + self.tolerance:
+                expected_misses = 3
+            elif time_since_last > (self.interval * 2) + self.tolerance:
+                expected_misses = 2
+            elif time_since_last > self.interval + self.tolerance:
+                expected_misses = 1
+            
+            if expected_misses > self.missed_count:
+                self.missed_count = expected_misses
+                print(f"⚠️ [HEARTBEAT] Falhou! ({self.missed_count}/{self.MAX_MISSES}) - {time_since_last:.1f}s sem sinal")
+                
+                if self.missed_count >= self.MAX_MISSES:
+                    print("💀 [HEARTBEAT] UPLINK MORTO! A iniciar desconexão de emergência...")
+                    if self.callback_on_death:
+                        self.callback_on_death()
+                    self.stop()
+                    break
