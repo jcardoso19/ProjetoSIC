@@ -130,3 +130,40 @@ class SecurityManager:
             info=b'sic_protocol_session_key',
             backend=default_backend()
         ).derive(shared_secret)
+        
+        return session_key
+    def sign_data(self,data_bytes):
+        signature = self.local_private_key.sign(
+            data_bytes,
+            ec.ECDSA(hashes.SHA256())
+        )
+        return base64.b64encode(signature).decode('utf-8')
+    
+    def verify_signature_with_cert(self, cert_pem_bytes, data_bytes, signature_b64):
+        try:
+            cert = x509.load_pem_x509_certificate(cert_pem_bytes)
+            public_key = cert.public_key()
+            
+            signature = base64.b64decode(signature_b64)
+            
+            public_key.verify(
+                signature,
+                data_bytes,
+                ec.ECDSA(hashes.SHA256())
+            )
+            return True
+        except Exception as e:
+            print(f"[SEC] Assinatura Inválida: {e}")
+            return False
+
+    def get_sink_certificate(self):
+        try:
+            path = "certs/sink.crt"
+            if not os.path.exists(path):
+                path = "support/certs/sink.crt"
+                
+            with open(path, "rb") as f:
+                return f.read()
+        except Exception as e:
+            print(f"[SEC] Erro ao ler certificado do Sink: {e}")
+            return None

@@ -1,6 +1,7 @@
 from common.protocol import Packet, MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK, MSG_TYPE_DATA, MSG_TYPE_HEARTBEAT
 import copy
 import time
+import json
 
 class Router:
     def __init__(self, my_nid, connection_manager, security_manager=None):
@@ -68,13 +69,17 @@ class Router:
         packet = Packet.from_bytes(packet_bytes)
         if not packet: return
 
+        if packet.source_nid == self.my_nid: return
+        
         if packet.msg_type in [MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK]:
             self.handle_handshake(packet, source_connection)
             return
 
+
         if self.security_manager:
             session_key = self._get_key_for_connection(source_connection)
             if not session_key or not self.security_manager.decrypt_packet(session_key, packet):
+                print(f"[SEC] Pacote rejeitado: Falha na desencriptação de {packet.source_nid}")
                 return
             
             last_seq = self.last_seq_nums.get(packet.source_nid, -1)
@@ -84,11 +89,36 @@ class Router:
         if packet.source_nid not in self.forwarding_table:
             self.forwarding_table[packet.source_nid] = source_connection
 
+
+        if packet.msg_type == MSG_TYPE_HEARTBEAT:
+            try:
+                hb_data = json.loads(packet.payload)
+                val = hb_data["val"]
+                sig = hb_data["sig"]
+                
+                sink_cert = self.security_manager.get_sink_certificate()
+                
+                if sink_cert:
+                    is_valid = self.security_manager.verify_signature_with_cert(
+                        sink_cert, val.encode('utf-8'), sig
+                    )
+                    
+                    if is_valid:
+                        if hasattr(self, 'on_heartbeat'):
+                            self.on_heartbeat(packet.source_nid)
+                        
+                        self.propagate_heartbeat(packet)
+                    else:
+                        print("⛔ [SEC] PERIGO: Heartbeat com assinatura falsa!")
+                else:
+                    print("⚠️ [HEARTBEAT] Sem certificado do Sink para validar.")
+
+            except Exception as e:
+                print(f"[ERR] Heartbeat malformado: {e}")
+            
+            return 
         if packet.dest_nid == self.my_nid:
             if self.app_callback: self.app_callback(packet)
-            if packet.msg_type == MSG_TYPE_HEARTBEAT and hasattr(self, 'on_heartbeat'):
-                self.on_heartbeat(packet.source_nid)
-                self.propagate_heartbeat(packet)
         else:
             self.forward(packet)
 
@@ -136,12 +166,13 @@ class Router:
 
         # Segurança e Sequência (apenas para pacotes de dados)
         if packet.msg_type not in [MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK]:
-            key = self._get_key_for_connection(target_conn)
-            if key: self.security_manager.encrypt_packet(key, packet)
-            
             conn_key = target_conn if isinstance(target_conn, str) else "UPLINK"
+            
             packet.seq_num = self.outgoing_seq_nums.get(conn_key, 0) + 1
             self.outgoing_seq_nums[conn_key] = packet.seq_num
+            
+            key = self._get_key_for_connection(target_conn)
+            if key: self.security_manager.encrypt_packet(key, packet)
 
         # --- Lógica de Envio Fragmentado ---
         data_bytes = packet.to_bytes()
