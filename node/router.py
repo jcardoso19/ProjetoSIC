@@ -1,6 +1,7 @@
 from common.protocol import Packet, MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK, MSG_TYPE_DATA, MSG_TYPE_HEARTBEAT
 import copy
 import time
+import json
 
 class Router:
     def __init__(self, my_nid, connection_manager, security_manager=None):
@@ -68,6 +69,8 @@ class Router:
         packet = Packet.from_bytes(packet_bytes)
         if not packet: return
 
+        if packet.source_nid == self.my_nid: return
+        
         if packet.msg_type in [MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK]:
             self.handle_handshake(packet, source_connection)
             return
@@ -162,12 +165,13 @@ class Router:
 
         # Segurança e Sequência (apenas para pacotes de dados)
         if packet.msg_type not in [MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK]:
-            key = self._get_key_for_connection(target_conn)
-            if key: self.security_manager.encrypt_packet(key, packet)
-            
             conn_key = target_conn if isinstance(target_conn, str) else "UPLINK"
+            
             packet.seq_num = self.outgoing_seq_nums.get(conn_key, 0) + 1
             self.outgoing_seq_nums[conn_key] = packet.seq_num
+            
+            key = self._get_key_for_connection(target_conn)
+            if key: self.security_manager.encrypt_packet(key, packet)
 
         # --- Lógica de Envio Fragmentado ---
         data_bytes = packet.to_bytes()
