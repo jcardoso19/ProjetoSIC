@@ -1,7 +1,6 @@
 import simplepyble
 import time
 
-
 # --- CONFIGURAÇÕES ---
 SIC_SERVICE_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CD"
 TARGET_NAMES = ["SIC-Node", "SINK_DEVICE", "SINK", "SIC"] # Nomes aceites
