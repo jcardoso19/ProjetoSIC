@@ -63,7 +63,7 @@ class NodeApp:
             print(f"{C_RED}       Verifica se criaste as chaves para {MY_NID}!{C_END}")
             sys.exit(1)
 
-        # MUDANÇA: Usa ADAPTER_INDEX e MY_NID das variáveis globais
+        # Configura o gestor com o índice do adaptador correto
         self.manager = ConnectionManager(self.sec_manager, adapter_index=ADAPTER_INDEX, my_nid=MY_NID)
         
         self.router = Router(MY_NID, self.manager, self.sec_manager)
@@ -103,7 +103,7 @@ class NodeApp:
     def wait_for_secure_connection(self):
         print(f"{C_YELLOW}[SYSTEM] A aguardar Handshake de Segurança... (Aguarde){C_END}")
         
-        # AUMENTADO PARA 90 SEGUNDOS
+        # Timeout de espera
         for _ in range(180):
             if not self.running or not self.manager.uplink:
                 print(f"{C_RED}[SYSTEM] Ligação perdida durante a negociação.{C_END}")
@@ -172,6 +172,15 @@ class NodeApp:
 
             # 2. Só redesenha o ecrã SE algo tiver mudado!
             if curr_uplink != last_uplink or curr_secure != last_secure:
+                
+                # --- CORREÇÃO AQUI ---
+                # Se tínhamos uplink e agora não temos (caiu ou demos disconnect), limpar memória DTLS
+                if last_uplink is not None and curr_uplink is None:
+                     print(f"\n{C_YELLOW}[SYSTEM] Ligação perdida. A limpar sessões DTLS...{C_END}")
+                     self.dtls_manager.sessions.clear()
+                     self.dtls_manager.pending_handshakes.clear()
+                # ---------------------
+
                 self.draw_ui()
                 print(f"{C_BOLD}{C_GREEN}node@{MY_NID}# {C_END}", end="", flush=True)
                 
@@ -180,7 +189,6 @@ class NodeApp:
                 last_secure = curr_secure
 
             # 3. Espera por input (timeout curto para verificar estados frequentemente)
-            # Se carregares numa tecla, entra aqui. Se não, passa à frente.
             if select.select([sys.stdin], [], [], 0.2)[0]:
                 line = sys.stdin.readline().strip()
                 if not line: 

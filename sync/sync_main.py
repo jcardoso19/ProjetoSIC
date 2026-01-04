@@ -9,7 +9,6 @@ from gi.repository import GLib
 # Imports do projeto
 from common.manageConnections import ConnectionManager
 from common.advertiser import NodeAdvertiser
-# IMPORT NOVO:
 from common.gatt_server import GATTServerManager
 from common.protocol import Packet, MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK
 
@@ -45,16 +44,13 @@ class SinkMain:
         self.loop_thread = threading.Thread(target=self.loop.run, daemon=True)
         self.loop_thread.start()
         
-        # 4. Connection Manager (Lógica antiga, mantemos para compatibilidade)
-        # Nota: Agora o GATT Server trata dos dados recebidos via BLE direto
-        # Mas mantemos isto caso uses lógica de rede mesh
+        # 4. Connection Manager (Lógica antiga, mantida para compatibilidade)
         self.manager = ConnectionManager(None, None, adapter_index=0)
         
         # Pequena pausa para garantir registo
         time.sleep(2)
         
-        # Iniciar o Anuncio
-        # Nota: O Advertiser agora só precisa de registar, o loop já corre
+        # Iniciar o Anúncio
         asyncio.run(self.advertiser.run())
 
         print("[SINK] Sink Ativo, Visível e com Serviço SIC!")
@@ -66,13 +62,17 @@ class SinkMain:
         except KeyboardInterrupt:
             print("\n[SINK] A desligar.")
             self.loop.quit()
+
     def on_data_received(self, data_bytes):
+        # Converte bytes brutos para objeto Packet
         packet = Packet.from_bytes(data_bytes)
 
         if not packet: 
             return
+
+        # --- Lógica de Handshake (Já existia) ---
         if packet.msg_type == MSG_TYPE_HELLO:
-            print("[SEC] Recebi Pedido de Handshake (HELLO)!")
+            print(f"[SEC] Recebi Pedido de Handshake (HELLO) de {packet.source_nid}!")
             
             cert_payload = self.sink_cert_bytes.decode('utf-8') 
 
@@ -84,6 +84,13 @@ class SinkMain:
             )
             print("[SINK] A enviar HELLO_ACK")
             self.gatt_server.send_data(response.to_bytes())
+
+        # --- CORREÇÃO: Lógica para Dados (Adicionado) ---
+        else:
+            # Captura qualquer outro pacote (MSG, E2E_DATA, etc.)
+            print(f"\n📨 [DADOS] Recebido pacote tipo '{packet.msg_type}' de {packet.source_nid}")
+            print(f"   Payload (Raw/Cifrado): {packet.payload}")
+            print("-" * 40)
 
 if __name__ == "__main__":
     app = SinkMain()
