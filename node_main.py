@@ -148,7 +148,7 @@ class NodeApp:
         print(f"       Node ID: {MY_NID} | Adapter: hci{ADAPTER_INDEX}")
         print("═"*60 + f"{C_END}")
         
-        print(f"  📡 PHYSICAL LINK:  {conn_txt}")
+        print(f"  📡  LINK:  {conn_txt}")
         print(f"  🛡️  E2E SECURITY:   {sec_txt}")
         print(f"{C_CYAN}─"*60 + f"{C_END}")
         print(f" {C_BOLD}MENU:{C_END} scan, conn, msg <txt>, disc, cls, q")
