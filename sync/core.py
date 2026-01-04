@@ -10,6 +10,7 @@ import time
 import asyncio
 import sys
 import json
+import os
 from gi.repository import GLib
 
 # --- CONFIGURAÇÃO ---
@@ -18,27 +19,33 @@ CERT_PATH = "certs/sink.crt"
 KEY_PATH = "certs/sink.key"
 ROOT_CA_PATH = "certs/root_ca.crt"
 
+# --- CORES E ESTILO (IGUAL AO NODE) ---
+C_BOLD    = "\033[1m"
+C_GREEN   = "\033[92m"
+C_BLUE    = "\033[94m"
+C_YELLOW  = "\033[93m"
+C_RED     = "\033[91m"
+C_CYAN    = "\033[96m"
+C_END     = "\033[0m"
+
+def clear_screen():
+    os.system('cls' if os.name == 'nt' else 'clear')
+
 class SinkCore:
     def __init__(self):
-        print(f"[*] A iniciar Sink Core ({SINK_NID})...")
-        
+        # 1. Configuração Inicial
         self.sec_manager = SecurityManager(ROOT_CA_PATH, CERT_PATH, KEY_PATH)
         
         from common.manageConnections import ConnectionManager
-        # MUDANÇA: adapter_index=0 para o Sink
         self.conn_manager = ConnectionManager(security_manager=self.sec_manager, adapter_index=0) 
         
         self.router = Router(SINK_NID, self.conn_manager, security_manager=self.sec_manager)
         
         self.bus = dbus.SystemBus()
-        
-        # --- MUDANÇA CRÍTICA: adapter_index=0 ---
         self.gatt_server = GATTServerManager(self.bus, adapter_index=0)
-        
         self.gatt_server.set_data_callback(self.router.process_packet)
         self.router.set_gatt_server(self.gatt_server)
         
-        # Advertiser também no 0
         self.advertiser = NodeAdvertiser(SINK_NID, hops=0, adapter_index=0)
         
         self.hb_running = False
@@ -47,34 +54,71 @@ class SinkCore:
         self.dtls_manager = DTLSManager(SINK_NID, self.sec_manager, self.router.forward)
         self.router.set_app_callback(self.dtls_manager.process_packet)
         self.dtls_manager.register_service("Inbox", self.on_inbox_message)
+        
+        # Redireciona prints do router para o nosso safe_print se necessário
+        # self.router._print_safe = self.safe_print 
+
+    def draw_ui(self):
+        clear_screen()
+        
+        # Determinar Estados para a UI
+        n_neighbors = len(self.router.downlink_keys)
+        neigh_status = f"{C_GREEN}{n_neighbors} Active{C_END}" if n_neighbors > 0 else f"{C_YELLOW}0 Waiting{C_END}"
+        
+        adv_status = f"{C_GREEN}ON (Hops: 0){C_END}" if self.advertiser.is_running else f"{C_RED}OFF{C_END}"
+        
+        # Cabeçalho igual ao do Node
+        print(f"{C_BOLD}{C_CYAN}══════════════════════════════════════════════════════════{C_END}")
+        print(f"       {C_BOLD}SIC PROTOCOL - SINK GATEWAY{C_END}")
+        print(f"       Node ID: {SINK_NID} | Role: Root Authority")
+        print(f"{C_BOLD}{C_CYAN}══════════════════════════════════════════════════════════{C_END}")
+        print(f" Status: [Neighbors: {neigh_status}] [Advertiser: {adv_status}] [Sec: {C_GREEN}READY{C_END}]")
+        print(f"{C_CYAN}──────────────────────────────────────────────────────────{C_END}")
+        print(f" MENU: {C_YELLOW}status{C_END}, {C_YELLOW}block <id>{C_END}, {C_YELLOW}unblock <id>{C_END}, {C_YELLOW}cls{C_END}, {C_YELLOW}q{C_END}")
+        print(f"{C_CYAN}──────────────────────────────────────────────────────────{C_END}")
+
+    def safe_print(self, msg):
+        """Imprime sem destruir o prompt (Igual ao _print_safe do Router)"""
+        prompt = f"{C_BOLD}{C_RED}sink#{C_END} "
+        sys.stdout.write(f"\r{msg}\n{prompt}")
+        sys.stdout.flush()
 
     def on_inbox_message(self, source_nid, client_id, message):
-        print(f"\n\U0001f4e8 [INBOX SERVICE] Recebido de {source_nid} (Client {client_id})")
-        print(f"   Conteúdo: {message}")
-        print("-" * 40)
+        # Caixa bonita para mensagens recebidas
+        msg_box =  f"\n {C_GREEN}╔══════════════════════════════════════════════════╗{C_END}\n"
+        msg_box += f" {C_GREEN}║ 📩 INBOX MESSAGE RECEIVED                        ║{C_END}\n"
+        msg_box += f" {C_GREEN}╠══════════════════════════════════════════════════╣{C_END}\n"
+        msg_box += f" ║ {C_BOLD}From:{C_END} {source_nid:<39}    ║\n"
+        msg_box += f" ║ {C_BOLD}Text:{C_END} {message:<39}    ║\n"
+        msg_box += f" {C_GREEN}╚══════════════════════════════════════════════════╝{C_END}"
+        
+        self.safe_print(msg_box)
 
     def start_background(self):
         self.gatt_server.register()
         self._start_advertiser()
         self._start_heartbeat()
         
-        print("[SINK] ✅ Sistema Operacional. A aguardar conexões...")
-        
         def run_loop():
             loop = GLib.MainLoop()
-            try:
-                loop.run()
-            except:
-                pass
+            try: loop.run()
+            except: pass
         
         t = threading.Thread(target=run_loop, daemon=True)
         t.start()
+        
+        # UI Inicial
+        self.draw_ui()
 
     def _start_advertiser(self):
         def run_ad():
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
-            new_loop.run_until_complete(self.advertiser.run())
+            try:
+                self.advertiser.is_running = True # Flag para UI
+                new_loop.run_until_complete(self.advertiser.run())
+            except:
+                self.advertiser.is_running = False
         
         t = threading.Thread(target=run_ad, daemon=True)
         t.start()
@@ -91,73 +135,74 @@ class SinkCore:
             time.sleep(5)
             if not self.router.downlink_keys:
                 continue
-            val_str = str(seq)
             
+            # Atualiza UI se houver mudança de vizinhos (Opcional, mas fica bonito)
+            # self.draw_ui() 
+            
+            val_str = str(seq)
             try:
                 signature = self.sec_manager.sign_data(val_str.encode('utf-8'))
-                
-                payload_dict = {
-                    "val": val_str,
-                    "sig": signature
-                }
+                payload_dict = {"val": val_str, "sig": signature}
                 payload_json = json.dumps(payload_dict)
-                
             except Exception as e:
-                print(f"[ERRO] Falha ao assinar Heartbeat: {e}")
+                self.safe_print(f"{C_RED}[ERROR] Sign Fail: {e}{C_END}")
                 continue
                 
             active_links = list(self.router.downlink_keys.keys())
-            
             for neighbor_mac in active_links:
-                pkt = Packet(
-                    source_nid=SINK_NID,
-                    dest_nid="BROADCAST", 
-                    msg_type=MSG_TYPE_HEARTBEAT,
-                    payload=payload_json,
-                    seq_num=seq
-                )
-                target_nid = None
-                for nid, mac in self.router.forwarding_table.items():
-                    if mac == neighbor_mac:
-                        target_nid = nid
-                        break
+                pkt = Packet(SINK_NID, "BROADCAST", payload_json, MSG_TYPE_HEARTBEAT)
+                pkt.seq_num = seq
+                
+                target_nid = next((nid for nid, mac in self.router.forwarding_table.items() if mac == neighbor_mac), None)
                 if target_nid:
                     pkt.dest_nid = target_nid
                     self.router.forward(pkt)
+            
+            # Feedback visual discreto de envio
+            # self.safe_print(f"{C_CYAN}♥ Sent HB #{seq}{C_END}")
             seq += 1
 
     def stop(self):
         self.hb_running = False
         self.advertiser.stop()
 
-    def print_menu(self):
-        print("\n=== SINK CONTROL ===")
-        print("1. Status")
-        print("2. Block HB <nid>")
-        print("3. Unblock HB <nid>")
-        print("q. Quit")
-
     def run_cli(self):
-        self.print_menu()
+        # self.draw_ui() já foi chamado no start
         while True:
             try:
-                cmd_line = input("> ").strip().split()
+                cmd_line = input(f"{C_BOLD}{C_RED}sink#{C_END} ").strip().split()
+                
                 if not cmd_line: continue
                 cmd = cmd_line[0].lower()
                 
-                if cmd == '1' or cmd == 'status':
-                    print(f"Neighbors: {list(self.router.downlink_keys.keys())}")
-                    print(f"Table: {self.router.forwarding_table}")
-                    print(f"Blocked: {self.router.blocked_nids}")
-                elif cmd == '2' or cmd == 'block':
-                    if len(cmd_line) > 1: self.router.block_heartbeat(cmd_line[1])
-                elif cmd == '3' or cmd == 'unblock':
-                    if len(cmd_line) > 1: self.router.unblock_heartbeat(cmd_line[1])
+                if cmd == 'status':
+                    print(f"\n{C_CYAN}--- NETWORK STATUS ---{C_END}")
+                    if not self.router.forwarding_table:
+                        print(" No nodes connected.")
+                    else:
+                        for nid, conn in self.router.forwarding_table.items():
+                            print(f" > {C_BOLD}{nid}{C_END} (Link: {conn})")
+                    print(f"{C_CYAN}----------------------{C_END}")
+                    
+                elif cmd == 'block':
+                    if len(cmd_line) > 1: 
+                        self.router.block_heartbeat(cmd_line[1])
+                        print(f"{C_YELLOW}[TEST] Blocked HB for {cmd_line[1]}{C_END}")
+                        
+                elif cmd == 'unblock':
+                    if len(cmd_line) > 1: 
+                        self.router.unblock_heartbeat(cmd_line[1])
+                        print(f"{C_GREEN}[TEST] Unblocked HB for {cmd_line[1]}{C_END}")
+
+                elif cmd == 'cls':
+                    self.draw_ui()
+
                 elif cmd == 'q':
+                    print(f"Shutting down...")
                     self.stop()
                     sys.exit(0)
             except Exception as e:
-                print(e)
+                print(f"{C_RED}Error: {e}{C_END}")
 
 if __name__ == "__main__":
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
