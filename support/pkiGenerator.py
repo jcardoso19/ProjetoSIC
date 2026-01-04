@@ -7,18 +7,17 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 # Configuração
-OUTPUT_DIR = "certs"
+OUTPUT_DIR = "../certs"
 CURVE = ec.SECP521R1() # O projeto pede P-521 (Segurança Elevada)
 
 def generate_private_key(filename):
     """Gera uma chave privada de Curva Elíptica e guarda em ficheiro."""
     key = ec.generate_private_key(CURVE)
     
-    # Serializar a chave para guardar no disco (PEM)
     pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption() # Para simplificar o lab (sem password)
+        encryption_algorithm=serialization.NoEncryption()
     )
     
     with open(filename, "wb") as f:
@@ -87,16 +86,16 @@ def main():
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
 
-    # 1. Gerar CA
     ca_key, ca_subject = create_root_ca()
     
-    # 2. Gerar Sink (Gateway)
-    # O campo Organizational Unit (OU) = "Sink" ajuda a identificar que este é o chefe da rede
     create_entity_cert("sink", u"Sink", ca_key, ca_subject)
     
-    # 3. Gerar Nós
     create_entity_cert("node1", u"IoT Device", ca_key, ca_subject)
     create_entity_cert("node2", u"IoT Device", ca_key, ca_subject)
+    create_entity_cert("node3", u"IoT Device", ca_key, ca_subject)
+    create_entity_cert("node4", u"IoT Device", ca_key, ca_subject)
+
+
     
     print("\nSucesso! Certificados guardados na pasta 'certs'.")
 
