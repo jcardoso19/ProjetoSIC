@@ -10,7 +10,7 @@
 
 ---
 
-## 📖 Visão Geral do Projeto
+## Visão Geral do Projeto
 
 Este projeto implementa uma rede **Ad Hoc (Mesh) segura** para dispositivos IoT utilizando a tecnologia **Bluetooth Low Energy (BLE)**. O sistema é composto por um nó central (**Sink**) e múltiplos nós (**Nodes**).
 
@@ -18,7 +18,7 @@ A rede permite que nós fora do alcance direto do Sink comuniquem através de n�
 
 ---
 
-## 🏗️ Arquitetura e Design (Gestão da Rede)
+## Arquitetura e Design (Gestão da Rede)
 
 O sistema foi desenhado de forma modular, de modo a separar a lógica de comunicação Bluetooth da lógica de encaminhamento e de segurança.
 
@@ -38,7 +38,7 @@ O sistema foi desenhado de forma modular, de modo a separar a lógica de comunic
 
 ---
 
-## 🔒 Implementação de Segurança (Funcionalidades de Segurança)
+## Implementação de Segurança (Funcionalidades de Segurança)
 
 A segurança foi o foco principal do projeto, tendo sido implementado um modelo de defesa em profundidade.
 
@@ -66,7 +66,7 @@ Mesmo que um nó intermédio seja comprometido, as mensagens da aplicação perm
 
 ---
 
-## ✅ Estado da Implementação
+## Estado da Implementação
 
 ### Funcionalidades Implementadas (100%)
 - [x] **Descoberta Automática:** *Scan* e ligação baseados em UUID.
