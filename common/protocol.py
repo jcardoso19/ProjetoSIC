@@ -17,6 +17,7 @@ class Packet:
             "pld": self.payload,
             "typ": self.msg_type,
             "seq": self.seq_num
+            
         }
         if self.mac:
             data["mac"] = self.mac
