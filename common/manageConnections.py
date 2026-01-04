@@ -22,8 +22,7 @@ class ConnectionManager:
         self.rx_buffer = bytearray()
         self.handshake_running = False
 
-    def set_router(self, router):
-        self.router = router
+    def set_router(self, router): self.router = router
 
     def _get_adapter(self, target_index):
         adapters = simplepyble.Adapter.get_adapters()
@@ -95,7 +94,6 @@ class ConnectionManager:
             hello_pkt = Packet(self.my_nid, "UPLINK", cert_pem.decode('utf-8'), MSG_TYPE_HELLO)
             self.send_packet(hello_pkt)
             
-            # Espera 6 segundos (tempo suficiente para o delay de 0.5s do Sink + transmissão)
             for _ in range(60):
                 if self.session_key or not self.uplink: break
                 time.sleep(0.1)
@@ -112,15 +110,13 @@ class ConnectionManager:
             data_bytes = packet.to_bytes()
             full_payload = len(data_bytes).to_bytes(4, 'big') + data_bytes
             
-            print(f"[DEBUG-TX] A enviar {len(full_payload)} bytes (Tipo: {packet.msg_type})")
-            
-            CHUNK_SIZE = 100 # Tamanho médio seguro
+            # --- ENVIO SILENCIOSO ---
+            CHUNK_SIZE = 100 
             for i in range(0, len(full_payload), CHUNK_SIZE):
                 chunk = full_payload[i : i + CHUNK_SIZE]
                 self.uplink.write_request(self.active_service_uuid, self.active_char_uuid, chunk)
                 time.sleep(0.15) 
-        except Exception as e:
-            print(f"[DEBUG-ERR] Falha no envio: {e}")
+        except:
             self.on_uplink_lost()
 
     def _on_data_received_from_uplink(self, data_bytes):

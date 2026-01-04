@@ -4,6 +4,12 @@ import time
 import json
 import threading 
 
+# --- CORES ESTÉTICAS ---
+C_PINK = "\033[95m"   # Coração
+C_RED = "\033[91m"    # Erro
+C_GREY = "\033[90m"   # Texto discreto
+C_END = "\033[0m"
+
 class Router:
     def __init__(self, my_nid, connection_manager, security_manager=None):
         self.my_nid = my_nid
@@ -70,25 +76,30 @@ class Router:
         if packet.source_nid not in self.forwarding_table:
             self.forwarding_table[packet.source_nid] = source_connection
 
+        # --- VISUALIZAÇÃO DE HEARTBEATS ---
         if packet.msg_type == MSG_TYPE_HEARTBEAT:
             raw_payload = packet.payload.strip().replace('\x00', '')
+            
+            # Caso 1: Heartbeat Simples ("ALIVE") - É o que estás a receber!
             if "ALIVE" in raw_payload:
+                print(f"   {C_PINK}♥ [SINK ALIVE] (Seq Pkt: {packet.seq_num}){C_END}")
                 if hasattr(self, 'on_heartbeat'): self.on_heartbeat(packet.source_nid)
                 self.propagate_heartbeat(packet)
                 return
+
+            # Caso 2: Heartbeat Assinado (JSON Completo)
             try:
                 hb_data = json.loads(raw_payload)
                 val = hb_data.get("val")
                 sig = hb_data.get("sig")
                 sink_cert = self.security_manager.get_sink_certificate()
+                
                 if sink_cert and val and sig:
                     is_valid = self.security_manager.verify_signature_with_cert(sink_cert, val.encode('utf-8'), sig)
                     if is_valid:
-                        print(f"[HEARTBEAT] ASSINATURA OK (Seq: {val})")
+                        print(f"   {C_PINK}♥ [SINK ALIVE] (Assinatura Válida, Seq: {val}){C_END}")
                         if hasattr(self, 'on_heartbeat'): self.on_heartbeat(packet.source_nid)
                         self.propagate_heartbeat(packet)
-                    else:
-                        print("[SEC] PERIGO: Assinatura FALHOU!")
             except: pass
             return 
             
@@ -110,10 +121,7 @@ class Router:
                 self.forwarding_table[packet.source_nid] = source_connection
                 
                 ack_pkt = Packet(source_nid=self.my_nid, dest_nid=packet.source_nid, msg_type=MSG_TYPE_HELLO_ACK, payload=self.security_manager.local_cert_pem.decode('utf-8'))
-                
-                # --- O FIX ESTÁ AQUI: Timer para não bloquear, mas atrasar o envio ---
                 threading.Timer(0.5, lambda: self.forward(ack_pkt)).start()
-                # ---------------------------------------------------------------------
 
             except Exception as e: print(f"[SEC] Falha Handshake: {e}")
 
