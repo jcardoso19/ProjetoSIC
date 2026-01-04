@@ -17,14 +17,10 @@ class SecurityManager:
         
         if local_cert_path and local_key_path:
             self.local_private_key = self.load_private_key(local_key_path)
-            # Carregar o certificado e guardar também o PEM cru para envio
             with open(local_cert_path, "rb") as f:
                 self.local_cert_pem = f.read()
                 
     def encrypt_packet(self, session_key, packet):
-        """
-        Encrypts the packet payload using AES-GCM.
-        """
         if not session_key:
             raise ValueError("Session Key is None")
 
@@ -32,13 +28,15 @@ class SecurityManager:
         nonce = os.urandom(12)
         aad = packet.get_header_bytes()
         
-        # Payload must be bytes
+        # --- DEBUG REMOVIDO ---
+        # print(f"[DEBUG-SEC] AAD String: {aad.decode('utf-8')}")
+        # print(f"[DEBUG-SEC] AAD Hex: {aad.hex()}")
+        
         if isinstance(packet.payload, str):
             data = packet.payload.encode('utf-8')
         else:
-            data = packet.payload # Assume bytes
+            data = packet.payload 
 
-        # AESGCM.encrypt(nonce, data, aad) returns Ciphertext + Tag.
         ct_and_tag = aesgcm.encrypt(nonce, data, aad)
         
         tag = ct_and_tag[-16:]
@@ -48,9 +46,6 @@ class SecurityManager:
         packet.mac = base64.b64encode(tag).decode('utf-8')
 
     def decrypt_packet(self, session_key, packet):
-        """
-        Decrypts packet payload. Validates AAD (Header).
-        """
         if not session_key:
             raise ValueError("Session Key is None")
             
@@ -58,14 +53,12 @@ class SecurityManager:
         aad = packet.get_header_bytes()
         
         try:
-            # Decode Base64
             enc_payload = base64.b64decode(packet.payload)
             tag = base64.b64decode(packet.mac)
             
             nonce = enc_payload[:12]
             ciphertext = enc_payload[12:]
             
-            # Reconstruct for generic API
             ct_and_tag = ciphertext + tag
             
             plaintext = aesgcm.decrypt(nonce, ct_and_tag, aad)
@@ -73,7 +66,8 @@ class SecurityManager:
             packet.payload = plaintext.decode('utf-8')
             return True
         except Exception as e:
-            print(f"[SEC] Decryption/Auth Failed: {e}")
+            # Mantemos apenas este print se houver erro real, mas sem spam
+            # print(f"[SEC] Decryption/Auth Failed: {e}")
             return False
 
     def _load_cert(self, path):
@@ -96,37 +90,56 @@ class SecurityManager:
             return x509.load_pem_x509_certificate(f.read(), default_backend())
 
     def verify_certificate(self, cert_pem_bytes):
-        """
-        Verifies a PEM encoded certificate against the Root CA.
-        """
         try:
             cert = x509.load_pem_x509_certificate(cert_pem_bytes, default_backend())
-            
-            # --- CORREÇÃO AQUI ---
-            # Chaves EC exigem que se especifique o algoritmo de assinatura (ECDSA)
             self.root_ca_public_key.verify(
                 cert.signature,
                 cert.tbs_certificate_bytes,
-                ec.ECDSA(hashes.SHA256())  # <--- ESTA FOI A MUDANÇA
+                ec.ECDSA(hashes.SHA256())
             )
-            
             return cert.public_key()
         except Exception as e:
             print(f"[SEC] Certificate Verification Failed: {e}")
             raise e
 
     def derive_session_key(self, local_private_key, peer_public_key):
-        """
-        Performs ECDH and derives a session key using HKDF.
-        """
         shared_secret = local_private_key.exchange(ec.ECDH(), peer_public_key)
-        
-        session_key = HKDF(
+        return HKDF(
             algorithm=hashes.SHA256(),
-            length=32, # 256 bits
+            length=32,
             salt=None,
             info=b'sic_protocol_session_key',
             backend=default_backend()
         ).derive(shared_secret)
-        
-        return session_key
+    
+    def sign_data(self,data_bytes):
+        signature = self.local_private_key.sign(
+            data_bytes,
+            ec.ECDSA(hashes.SHA256())
+        )
+        return base64.b64encode(signature).decode('utf-8')
+    
+    def verify_signature_with_cert(self, cert_pem_bytes, data_bytes, signature_b64):
+        try:
+            cert = x509.load_pem_x509_certificate(cert_pem_bytes)
+            public_key = cert.public_key()
+            signature = base64.b64decode(signature_b64)
+            public_key.verify(
+                signature,
+                data_bytes,
+                ec.ECDSA(hashes.SHA256())
+            )
+            return True
+        except Exception as e:
+            # print(f"[SEC] Assinatura Inválida: {e}")
+            return False
+
+    def get_sink_certificate(self):
+        try:
+            path = "certs/sink.crt"
+            if not os.path.exists(path):
+                path = "support/certs/sink.crt"
+            with open(path, "rb") as f:
+                return f.read()
+        except:
+            return None
