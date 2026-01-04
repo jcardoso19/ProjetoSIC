@@ -113,7 +113,7 @@ class SinkCore:
                     source_nid=SINK_NID,
                     dest_nid="BROADCAST", 
                     msg_type=MSG_TYPE_HEARTBEAT,
-                    payload="ALIVE",
+                    payload=payload_json,
                     seq_num=seq
                 )
                 target_nid = None
