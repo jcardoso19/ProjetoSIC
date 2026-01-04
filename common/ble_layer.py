@@ -16,9 +16,7 @@ class BLELayer:
         print(f"[BLE] A usar adaptador: {self.adapter.identifier()}")
 
     def scan_for_potential_uplinks(self, duration=3000):
-        """
-        Retorna lista de candidatos ordenados por Hops (menor é melhor).
-        """
+
         print("[BLE] A fazer scan...")
         self.adapter.scan_for(duration)
         results = self.adapter.scan_get_results()
@@ -60,7 +58,6 @@ class BLELayer:
             return False
 
     def send_packet(self, device, packet_bytes):
-        """Envia bytes para a característica do serviço"""
         try:
             device.write_request(SIC_SERVICE_UUID, SIC_CHAR_UUID, packet_bytes)
             return True
@@ -69,7 +66,6 @@ class BLELayer:
             return False
 
     def subscribe_notifications(self, device, callback_func):
-        """Ativa receção de dados"""
         try:
             device.notify(SIC_SERVICE_UUID, SIC_CHAR_UUID, callback_func)
             print("[BLE] Notificações ativas.")

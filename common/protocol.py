@@ -23,9 +23,7 @@ class Packet:
         return json.dumps(data).encode('utf-8')
 
     def get_header_bytes(self):
-        """
-        Garante AAD consistente para o AES-GCM (string com pipes).
-        """
+
         try:
             sequence = int(self.seq_num)
         except:
@@ -36,17 +34,12 @@ class Packet:
 
     @staticmethod
     def from_bytes(data_bytes):
-        """
-        Versão robusta: Ignora erros de descodificação e limpa lixo.
-        """
+
         try:
-            # 1. Decodificar ignorando bytes inválidos (EVITA O CRASH 0x83)
             raw_str = data_bytes.decode('utf-8', errors='ignore')
             
-            # 2. Limpar caracteres nulos e espaços extra
             clean_str = raw_str.strip().replace('\x00', '')
             
-            # 3. Encontrar o JSON real (ignora lixo antes do '{' e depois do '}')
             start = clean_str.find('{')
             end = clean_str.rfind('}')
             
@@ -65,8 +58,7 @@ class Packet:
                 mac=data.get("mac")
             )
         except Exception as e:
-            # Silenciar erros de parsing para não poluir o log
-            # print(f"[PROTOCOL] Erro ignorado: {e}")
+
             return None
 
 # Constantes

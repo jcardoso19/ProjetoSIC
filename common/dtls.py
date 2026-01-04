@@ -26,9 +26,8 @@ class DTLSManager:
 
     def start_handshake(self, peer_nid):
         if peer_nid in self.sessions: 
-            return # Já ligado
+            return 
         
-        # --- CORREÇÃO: Evitar spam de pedidos ---
         if peer_nid in self.pending_handshakes:
             print(f"[DTLS] Handshake com {peer_nid} já em curso. Aguarde...")
             return

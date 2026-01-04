@@ -110,7 +110,6 @@ class ConnectionManager:
             data_bytes = packet.to_bytes()
             full_payload = len(data_bytes).to_bytes(4, 'big') + data_bytes
             
-            # --- ENVIO SILENCIOSO ---
             CHUNK_SIZE = 100 
             for i in range(0, len(full_payload), CHUNK_SIZE):
                 chunk = full_payload[i : i + CHUNK_SIZE]
