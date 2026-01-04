@@ -1,34 +1,40 @@
 import simplepyble
 import time
 
-# O TEU MAC FIXO
-TARGET_SINK_MAC = "E0:D3:62:D7:32:17"
+REF_SERVICE_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CD"
 
-def scan_for_candidates(adapter, duration=5000):
-    print(f"[SCAN] A procurar EXCLUSIVAMENTE o endereço: {TARGET_SINK_MAC}")
+def scan_for_candidates(adapter, duration=3000):
+    print(f"[SCAN] A procurar dispositivos com Serviço: {REF_SERVICE_UUID}...")
     
     try:
         adapter.scan_for(duration)
     except Exception as e:
-        print(f"[WARN] Erro no scan: {e}")
+        print(f"[WARN] Erro no scan BLE: {e}")
         return []
 
     results = adapter.scan_get_results()
+    candidates = []
     
     for device in results:
-        addr = device.address()
-        rssi = device.rssi()
-        
-        # Comparação direta. Se não for igual, ignora.
-        if addr == TARGET_SINK_MAC:
-            print(f"   🎯 ALVO ENCONTRADO: {addr} | RSSI: {rssi}")
-            return [{
-                "device_obj": device,
-                "name": "SINK_DEVICE",
-                "address": addr,
-                "hops": 0,
-                "rssi": rssi
-            }]
+        try:
+            uuids_no_ar = device.services()
             
-    print(f"   ❌ O MAC {TARGET_SINK_MAC} não está visível no ar.")
-    return []
+            uuids_normalizados = [u.lower() for u in uuids_no_ar]
+            
+            if REF_SERVICE_UUID.lower() in uuids_normalizados:
+                print(f"   ✅ ALVO VÁLIDO ENCONTRADO: {device.identifier()} [{device.address()}] | RSSI: {device.rssi()}")
+                
+                candidates.append({
+                    "device_obj": device,
+                    "name": device.identifier(),
+                    "address": device.address(),
+                    "hops": 0,
+                    "rssi": device.rssi()
+                })
+        except:
+            continue
+            
+    if not candidates:
+        print("   ❌ Nenhum dispositivo compatível encontrado.")
+        
+    return candidates
