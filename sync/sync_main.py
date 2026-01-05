@@ -54,13 +54,17 @@ class SinkMain:
         except KeyboardInterrupt:
             print("\n[SINK] A desligar.")
             self.loop.quit()
+
     def on_data_received(self, data_bytes):
+        # Converte bytes brutos para objeto Packet
         packet = Packet.from_bytes(data_bytes)
 
         if not packet: 
             return
+
+        # --- Lógica de Handshake (Já existia) ---
         if packet.msg_type == MSG_TYPE_HELLO:
-            print("[SEC] Recebi Pedido de Handshake (HELLO)!")
+            print(f"[SEC] Recebi Pedido de Handshake (HELLO) de {packet.source_nid}!")
             
             cert_payload = self.sink_cert_bytes.decode('utf-8') 
 
@@ -72,6 +76,13 @@ class SinkMain:
             )
             print("[SINK] A enviar HELLO_ACK")
             self.gatt_server.send_data(response.to_bytes())
+
+        # --- CORREÇÃO: Lógica para Dados (Adicionado) ---
+        else:
+            # Captura qualquer outro pacote (MSG, E2E_DATA, etc.)
+            print(f"\n📨 [DADOS] Recebido pacote tipo '{packet.msg_type}' de {packet.source_nid}")
+            print(f"   Payload (Raw/Cifrado): {packet.payload}")
+            print("-" * 40)
 
 if __name__ == "__main__":
     app = SinkMain()

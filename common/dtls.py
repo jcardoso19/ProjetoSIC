@@ -17,7 +17,8 @@ class DTLSManager:
         self.sec_manager = security_manager
         self.send_func = router_send_func 
         self.sessions = {} 
-        self.pending_handshakes = set()
+        # MUDANÇA: Agora é um dicionário {nid: timestamp} para gerir timeouts
+        self.pending_handshakes = {} 
         self.services = {} 
 
     def register_service(self, service_name, callback):
@@ -29,9 +30,13 @@ class DTLSManager:
             return 
         
         if peer_nid in self.pending_handshakes:
-            print(f"[DTLS] Handshake com {peer_nid} já em curso. Aguarde...")
-            return
-        # ----------------------------------------
+            last_attempt = self.pending_handshakes[peer_nid]
+            if now - last_attempt < 3.0:
+                print(f"[DTLS] Handshake com {peer_nid} em curso. Aguarde...")
+                return
+            else:
+                print(f"[DTLS] Timeout no handshake com {peer_nid}. A tentar novamente...")
+        # ------------------------------------------------
 
         print(f"[DTLS] A iniciar handshake E2E com {peer_nid}...")
         
@@ -43,7 +48,9 @@ class DTLSManager:
             msg_type=MSG_TYPE_E2E_HELLO,
             payload=self.sec_manager.local_cert_pem.decode('utf-8')
         )
-        self.pending_handshakes.add(peer_nid)
+        
+        # Regista o tempo desta tentativa
+        self.pending_handshakes[peer_nid] = now
         self.send_func(pkt)
 
     def process_packet(self, packet):
@@ -77,8 +84,11 @@ class DTLSManager:
                     self.sec_manager.local_private_key, peer_pub_key
                 )
                 self.sessions[packet.source_nid] = DTLSSession(packet.source_nid, session_key)
+                
+                # Remove da lista de pendentes porque teve sucesso
                 if packet.source_nid in self.pending_handshakes:
-                    self.pending_handshakes.remove(packet.source_nid)
+                    del self.pending_handshakes[packet.source_nid]
+                    
                 print(f"[DTLS] Sessão E2E estabelecida com {packet.source_nid} (Active)")
             except Exception as e:
                 print(f"[DTLS] Falha no Handshake E2E (ACK): {e}")
@@ -87,6 +97,7 @@ class DTLSManager:
             self._handle_data(packet)
 
     def send_data(self, peer_nid, message_str, service="Inbox", client_id=0):
+        # Se não houver sessão, tenta iniciar handshake
         if peer_nid not in self.sessions:
             print(f"[DTLS] Erro: Sem sessão. A iniciar handshake...")
             self.start_handshake(peer_nid)
@@ -105,7 +116,9 @@ class DTLSManager:
             payload=payload_bytes
         )
         
+        # Cifragem
         self.sec_manager.encrypt_packet(session.session_key, e2e_pkt)
+        # Formato final do payload cifrado: SEQ::MAC::DADOS
         e2e_pkt.payload = f"{e2e_pkt.seq_num}::{e2e_pkt.mac}::{e2e_pkt.payload}"
 
         session.outgoing_seq += 1
@@ -116,6 +129,7 @@ class DTLSManager:
         session = self.sessions.get(packet.source_nid)
         if not session: return
 
+        # Parse do formato SEQ::MAC::DADOS
         try:
             if isinstance(packet.payload, str) and "::" in packet.payload:
                 parts = packet.payload.split("::", 2)
@@ -129,6 +143,7 @@ class DTLSManager:
             print(f"[DTLS] ❌ Drop: Falha decifragem E2E de {packet.source_nid}")
             return
 
+        # Proteção contra Replay Attack
         if packet.seq_num <= session.incoming_seq: return
         session.incoming_seq = packet.seq_num
 

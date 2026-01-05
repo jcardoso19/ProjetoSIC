@@ -161,6 +161,15 @@ class NodeApp:
             curr_secure = getattr(self.router, 'is_secured', False)
 
             if curr_uplink != last_uplink or curr_secure != last_secure:
+                
+                # --- CORREÇÃO AQUI ---
+                # Se tínhamos uplink e agora não temos (caiu ou demos disconnect), limpar memória DTLS
+                if last_uplink is not None and curr_uplink is None:
+                     print(f"\n{C_YELLOW}[SYSTEM] Ligação perdida. A limpar sessões DTLS...{C_END}")
+                     self.dtls_manager.sessions.clear()
+                     self.dtls_manager.pending_handshakes.clear()
+                # ---------------------
+
                 self.draw_ui()
                 print(f"{C_BOLD}{C_GREEN}node@{MY_NID}# {C_END}", end="", flush=True)
                 
