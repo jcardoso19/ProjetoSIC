@@ -20,7 +20,6 @@ class HeartbeatManager:
         self.thread = threading.Thread(target=self._monitor)
         self.thread.daemon = True
         self.thread.start()
-        # print(f"[HEARTBEAT] Monitorização iniciada.")
 
     def stop(self):
         self.running = False
@@ -29,11 +28,9 @@ class HeartbeatManager:
         """Chamado pelo Router quando chega um HB válido"""
         self.last_heartbeat_time = time.time()
         
-        # Se recuperou de uma falha, avisa. Se for normal, fica calado.
         if self.missed_count > 0:
             print(f"💓 [HEARTBEAT] Recuperado! (Contador zerado)")
-        # else:
-            # print(f"💓 [HEARTBEAT] Recebido. Timer resetado.") # <--- SILENCIADO
+
             
         self.missed_count = 0
 

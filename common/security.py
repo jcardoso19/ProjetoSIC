@@ -28,9 +28,7 @@ class SecurityManager:
         nonce = os.urandom(12)
         aad = packet.get_header_bytes()
         
-        # --- DEBUG REMOVIDO ---
-        # print(f"[DEBUG-SEC] AAD String: {aad.decode('utf-8')}")
-        # print(f"[DEBUG-SEC] AAD Hex: {aad.hex()}")
+
         
         if isinstance(packet.payload, str):
             data = packet.payload.encode('utf-8')
@@ -66,8 +64,7 @@ class SecurityManager:
             packet.payload = plaintext.decode('utf-8')
             return True
         except Exception as e:
-            # Mantemos apenas este print se houver erro real, mas sem spam
-            # print(f"[SEC] Decryption/Auth Failed: {e}")
+
             return False
 
     def _load_cert(self, path):
@@ -131,7 +128,6 @@ class SecurityManager:
             )
             return True
         except Exception as e:
-            # print(f"[SEC] Assinatura Inválida: {e}")
             return False
 
     def get_sink_certificate(self):

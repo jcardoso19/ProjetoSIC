@@ -55,7 +55,6 @@ class TestAdvertisement(dbus.service.Object):
         print(f'[ADV] {self.path}: Released!')
 
 class NodeAdvertiser:
-    # MUDANÇA: Aceita adapter_index no init
     def __init__(self, advertiser_name, hops=99, adapter_index=0):
         self.name = advertiser_name
         self.hops = hops
@@ -78,7 +77,6 @@ class NodeAdvertiser:
             return
 
         adapter_path = adapter_props.object_path
-        # print(f"[ADVERTISER] Adaptador selecionado: {adapter_path}")
 
         self.ad_manager = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path),
                                          LE_ADVERTISING_MANAGER_IFACE)
@@ -106,7 +104,6 @@ class NodeAdvertiser:
         remote_om = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, '/'), DBUS_OM_IFACE)
         objects = remote_om.GetManagedObjects()
         
-        # Procura o adaptador específico (ex: /org/bluez/hci1)
         for o, props in objects.items():
             if LE_ADVERTISING_MANAGER_IFACE in props and f"/{target_name}" in o:
                 return bus.get_object(BLUEZ_SERVICE_NAME, o)

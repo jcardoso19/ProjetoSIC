@@ -13,13 +13,11 @@ import json
 import os
 from gi.repository import GLib
 
-# --- CONFIGURAÇÃO ---
 SINK_NID = "sink" 
 CERT_PATH = "certs/sink.crt"
 KEY_PATH = "certs/sink.key"
 ROOT_CA_PATH = "certs/root_ca.crt"
 
-# --- CORES E ESTILO (IGUAL AO NODE) ---
 C_BOLD    = "\033[1m"
 C_GREEN   = "\033[92m"
 C_BLUE    = "\033[94m"
@@ -33,7 +31,6 @@ def clear_screen():
 
 class SinkCore:
     def __init__(self):
-        # 1. Configuração Inicial
         self.sec_manager = SecurityManager(ROOT_CA_PATH, CERT_PATH, KEY_PATH)
         
         from common.manageConnections import ConnectionManager
@@ -55,19 +52,15 @@ class SinkCore:
         self.router.set_app_callback(self.dtls_manager.process_packet)
         self.dtls_manager.register_service("Inbox", self.on_inbox_message)
         
-        # Redireciona prints do router para o nosso safe_print se necessário
-        # self.router._print_safe = self.safe_print 
 
     def draw_ui(self):
         clear_screen()
         
-        # Determinar Estados para a UI
         n_neighbors = len(self.router.downlink_keys)
         neigh_status = f"{C_GREEN}{n_neighbors} Active{C_END}" if n_neighbors > 0 else f"{C_YELLOW}0 Waiting{C_END}"
         
         adv_status = f"{C_GREEN}ON (Hops: 0){C_END}" if self.advertiser.is_running else f"{C_RED}OFF{C_END}"
         
-        # Cabeçalho igual ao do Node
         print(f"{C_BOLD}{C_CYAN}══════════════════════════════════════════════════════════{C_END}")
         print(f"       {C_BOLD}SIC PROTOCOL - SINK GATEWAY{C_END}")
         print(f"       Node ID: {SINK_NID} | Role: Root Authority")
@@ -84,7 +77,6 @@ class SinkCore:
         sys.stdout.flush()
 
     def on_inbox_message(self, source_nid, client_id, message):
-        # Caixa bonita para mensagens recebidas
         msg_box =  f"\n {C_GREEN}╔══════════════════════════════════════════════════╗{C_END}\n"
         msg_box += f" {C_GREEN}║ 📩 INBOX MESSAGE RECEIVED                        ║{C_END}\n"
         msg_box += f" {C_GREEN}╠══════════════════════════════════════════════════╣{C_END}\n"
@@ -107,7 +99,6 @@ class SinkCore:
         t = threading.Thread(target=run_loop, daemon=True)
         t.start()
         
-        # UI Inicial
         self.draw_ui()
 
     def _start_advertiser(self):
@@ -135,10 +126,7 @@ class SinkCore:
             time.sleep(5)
             if not self.router.downlink_keys:
                 continue
-            
-            # Atualiza UI se houver mudança de vizinhos (Opcional, mas fica bonito)
-            # self.draw_ui() 
-            
+
             val_str = str(seq)
             try:
                 signature = self.sec_manager.sign_data(val_str.encode('utf-8'))
@@ -157,9 +145,7 @@ class SinkCore:
                 if target_nid:
                     pkt.dest_nid = target_nid
                     self.router.forward(pkt)
-            
-            # Feedback visual discreto de envio
-            # self.safe_print(f"{C_CYAN}♥ Sent HB #{seq}{C_END}")
+
             seq += 1
 
     def stop(self):
@@ -167,7 +153,6 @@ class SinkCore:
         self.advertiser.stop()
 
     def run_cli(self):
-        # self.draw_ui() já foi chamado no start
         while True:
             try:
                 cmd_line = input(f"{C_BOLD}{C_RED}sink#{C_END} ").strip().split()

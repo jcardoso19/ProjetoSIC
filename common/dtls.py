@@ -27,10 +27,8 @@ class DTLSManager:
 
     def start_handshake(self, peer_nid):
         if peer_nid in self.sessions: 
-            return # Já ligado e seguro
+            return 
         
-        # --- CORREÇÃO: Lógica de Timeout (3 segundos) ---
-        now = time.time()
         if peer_nid in self.pending_handshakes:
             last_attempt = self.pending_handshakes[peer_nid]
             if now - last_attempt < 3.0:

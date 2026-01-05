@@ -2,7 +2,6 @@ import dbus
 import dbus.service
 import dbus.mainloop.glib
 
-# --- CONFIGURAÇÃO UUIDs ---
 SIC_SERVICE_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CD"
 SIC_RX_CHAR_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CE"
 
@@ -135,17 +134,13 @@ class Characteristic(dbus.service.Object):
     def PropertiesChanged(self, interface, changed, invalidated):
         pass
 
-# --- CLASSE CORRIGIDA ---
 class GATTServerManager:
-    # Agora aceita adapter_index
     def __init__(self, bus, adapter_index=0):
         self.bus = bus
         self.app = Application(bus)
         
-        # 1. Criar o Serviço SIC
         self.sic_service = Service(bus, 0, SIC_SERVICE_UUID, True)
         
-        # 2. Criar a Característica RX
         self.rx_char = Characteristic(bus, 0, SIC_RX_CHAR_UUID, 
                                       ['read', 'write', 'write-without-response','notify'], 
                                       self.sic_service)
@@ -153,7 +148,6 @@ class GATTServerManager:
         self.sic_service.add_characteristic(self.rx_char)
         self.app.add_service(self.sic_service)
         
-        # A MUDANÇA ESTÁ AQUI: Usa o índice correto (hci0 ou hci1)
         adapter_path = f'/org/bluez/hci{adapter_index}'
         
         try:

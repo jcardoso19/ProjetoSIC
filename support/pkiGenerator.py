@@ -6,9 +6,8 @@ from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-# Configuração
 OUTPUT_DIR = "../certs"
-CURVE = ec.SECP521R1() # O projeto pede P-521 (Segurança Elevada)
+CURVE = ec.SECP521R1() 
 
 def generate_private_key(filename):
     """Gera uma chave privada de Curva Elíptica e guarda em ficheiro."""

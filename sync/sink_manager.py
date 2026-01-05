@@ -6,19 +6,13 @@ class SinkManager:
         print("[LOGIC] Gestor de Dados do Sink iniciado.")
 
     def process_packet(self, data_bytes, source_connection=None):
-        """
-        Esta função é chamada automaticamente quando recebemos dados de um Nó via Bluetooth.
-        """
         try:
-            # Tenta descodificar a mensagem (assumindo que é texto)
             message = data_bytes.decode('utf-8')
             
-            # Obtém informações de quem enviou (se disponível)
             sender_info = "Desconhecido"
             rssi = "N/A"
             
             if source_connection:
-                # Tenta obter o endereço ou nome do dispositivo conectado
                 try:
                     sender_info = source_connection.address()
                     rssi = source_connection.rssi()

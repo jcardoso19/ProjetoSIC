@@ -16,7 +16,6 @@ from common.advertiser import NodeAdvertiser
 from common.dtls import DTLSManager
 from common.scan import scan_for_candidates
 
-# --- CORES ANSI ---
 C_BOLD = "\033[1m"
 C_GREEN = "\033[92m"
 C_BLUE = "\033[94m"
@@ -25,11 +24,7 @@ C_RED = "\033[91m"
 C_CYAN = "\033[96m"
 C_END = "\033[0m"
 
-# ==============================================================================
-# 1. LER ARGUMENTOS DA LINHA DE COMANDOS (CLI)
-# ==============================================================================
 
-# Argumento 1: Nome do Nó (Default: node1)
 if len(sys.argv) > 1:
     MY_NID = sys.argv[1]
 else:
@@ -63,7 +58,6 @@ class NodeApp:
             print(f"{C_RED}       Verifica se criaste as chaves para {MY_NID}!{C_END}")
             sys.exit(1)
 
-        # Configura o gestor com o índice do adaptador correto
         self.manager = ConnectionManager(self.sec_manager, adapter_index=ADAPTER_INDEX, my_nid=MY_NID)
         
         self.router = Router(MY_NID, self.manager, self.sec_manager)
@@ -103,7 +97,6 @@ class NodeApp:
     def wait_for_secure_connection(self):
         print(f"{C_YELLOW}[SYSTEM] A aguardar Handshake de Segurança... (Aguarde){C_END}")
         
-        # Timeout de espera
         for _ in range(180):
             if not self.running or not self.manager.uplink:
                 print(f"{C_RED}[SYSTEM] Ligação perdida durante a negociação.{C_END}")
@@ -157,20 +150,16 @@ class NodeApp:
     def run_cli(self):
         import select
         
-        # Variáveis para memorizar o estado anterior
         last_uplink = None
         last_secure = None
         
-        # Desenha a primeira vez
         self.draw_ui()
         print(f"{C_BOLD}{C_GREEN}node@{MY_NID}# {C_END}", end="", flush=True)
 
         while self.running:
-            # 1. Verificar o Estado Atual
             curr_uplink = self.manager.uplink
             curr_secure = getattr(self.router, 'is_secured', False)
 
-            # 2. Só redesenha o ecrã SE algo tiver mudado!
             if curr_uplink != last_uplink or curr_secure != last_secure:
                 
                 # --- CORREÇÃO AQUI ---
@@ -184,15 +173,12 @@ class NodeApp:
                 self.draw_ui()
                 print(f"{C_BOLD}{C_GREEN}node@{MY_NID}# {C_END}", end="", flush=True)
                 
-                # Atualiza a memória
                 last_uplink = curr_uplink
                 last_secure = curr_secure
 
-            # 3. Espera por input (timeout curto para verificar estados frequentemente)
             if select.select([sys.stdin], [], [], 0.2)[0]:
                 line = sys.stdin.readline().strip()
                 if not line: 
-                    # Se der Enter vazio, redesenha o prompt
                     print(f"{C_BOLD}{C_GREEN}node@{MY_NID}# {C_END}", end="", flush=True)
                     continue
                 
@@ -202,11 +188,10 @@ class NodeApp:
                 if cmd == "scan":
                     scan_for_candidates(self.manager.adapter)
                     input("Pressiona Enter para continuar...") 
-                    self.draw_ui() # Força redesenho após o scan
+                    self.draw_ui()
                 elif cmd == "conn":
                     if self.manager.find_and_connect_uplink():
                         self.wait_for_secure_connection()
-                        # O wait já mexe no ecrã, forçamos update a seguir
                         last_uplink = None 
                 elif cmd == "msg":
                     if len(parts) < 2: 
