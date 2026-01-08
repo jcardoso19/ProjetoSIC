@@ -140,6 +140,8 @@ class GATTServerManager:
         self.bus = bus
         self.app = Application(bus)
         self._disconnect_callback = None
+        self._data_callback = None
+        self._seen_clients = set()
         
         self.sic_service = Service(bus, 0, SIC_SERVICE_UUID, True)
         
@@ -172,7 +174,22 @@ class GATTServerManager:
             print(f"[GATT] WARN: Não consegui registar listener de disconnect: {e}")
 
     def set_data_callback(self,callback):
-        self.rx_char.set_callback(callback)
+        self._data_callback = callback
+        self.rx_char.set_callback(self._on_rx_data)
+
+    def _on_rx_data(self, data_bytes, device_mac):
+        # Marca MAC como cliente real do nosso serviço
+        if device_mac and device_mac != "UNKNOWN":
+            self._seen_clients.add(device_mac)
+
+        if not self._data_callback:
+            return
+
+        # Compatibilidade: alguns callbacks antigos aceitam só (data_bytes)
+        try:
+            self._data_callback(data_bytes, device_mac)
+        except TypeError:
+            self._data_callback(data_bytes)
 
     def set_disconnect_callback(self, callback):
         """callback(mac_str) chamado quando org.bluez.Device1 Connected=false."""
@@ -192,9 +209,11 @@ class GATTServerManager:
                 device_mac = str(path).split('dev_')[-1].replace('_', ':')
 
             if device_mac:
-                print(f"[GATT] Dispositivo desconectou: {device_mac}")
-                if self._disconnect_callback:
-                    self._disconnect_callback(device_mac)
+                # Só interessa se já vimos este MAC usar o nosso serviço
+                if device_mac in self._seen_clients:
+                    print(f"[GATT] Dispositivo desconectou: {device_mac}")
+                    if self._disconnect_callback:
+                        self._disconnect_callback(device_mac)
         except Exception:
             pass
     

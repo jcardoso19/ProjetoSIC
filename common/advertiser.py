@@ -2,6 +2,7 @@ import dbus
 import dbus.mainloop.glib
 import dbus.service
 from gi.repository import GLib
+import threading
 
 BLUEZ_SERVICE_NAME = 'org.bluez'
 LE_ADVERTISING_MANAGER_IFACE = 'org.bluez.LEAdvertisingManager1'
@@ -17,7 +18,7 @@ class InvalidArgsException(dbus.exceptions.DBusException):
 class TestAdvertisement(dbus.service.Object):
     PATH_BASE = '/org/bluez/example/advertisement'
 
-    def __init__(self, bus, index, advertising_type, local_name, hops):
+    def __init__(self, bus, index, advertising_type, local_name, hops, release_callback=None):
         self.path = self.PATH_BASE + str(index)
         self.bus = bus
         self.ad_type = advertising_type
@@ -26,6 +27,7 @@ class TestAdvertisement(dbus.service.Object):
         self.manufacturer_data = dbus.Dictionary({}, signature='qv')
         self.manufacturer_data[0xFFFF] = dbus.Array([0xFF, 0xFF, hops], signature='y')
         self.include_tx_power = True
+        self.release_callback = release_callback
         dbus.service.Object.__init__(self, bus, self.path)
 
     def get_properties(self):
@@ -52,7 +54,9 @@ class TestAdvertisement(dbus.service.Object):
 
     @dbus.service.method(LE_ADVERTISEMENT_IFACE, in_signature='', out_signature='')
     def Release(self):
-        print(f'[ADV] {self.path}: Released!')
+        print(f'[ADV] {self.path}: Advertising Released (Stop).')
+        if self.release_callback:
+            self.release_callback()
 
 class NodeAdvertiser:
     def __init__(self, advertiser_name, hops=99, adapter_index=0):
@@ -81,8 +85,11 @@ class NodeAdvertiser:
         self.ad_manager = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path),
                                          LE_ADVERTISING_MANAGER_IFACE)
 
-        self.ad = TestAdvertisement(self.bus, 0, 'peripheral', self.name, self.hops)
+        self.ad = TestAdvertisement(self.bus, 0, 'peripheral', self.name, self.hops, release_callback=self._handle_release)
 
+        self._register()
+
+    def _register(self):
         try:
             self.ad_manager.RegisterAdvertisement(self.ad.get_path(), {},
                                                   reply_handler=self.register_ad_callback,
@@ -91,8 +98,30 @@ class NodeAdvertiser:
         except Exception as e:
             print(f"[ADVERTISER] Falha ao registar: {e}")
 
+    def _handle_release(self):
+        if not self.is_running:
+            return
+        print("[ADV] Advertisement interrompido pelo sistema (conexão). A reiniciar em 2s...")
+        threading.Timer(2.0, self._restart_after_release).start()
+
+    def _restart_after_release(self):
+        if not self.is_running:
+            return
+        try:
+            self.ad_manager.RegisterAdvertisement(self.ad.get_path(), {},
+                                                  reply_handler=self.register_ad_callback,
+                                                  error_handler=self.register_ad_error_callback)
+        except Exception as e:
+            print(f"[ADV] Falha ao reiniciar (busy?): {e}. Nova tentativa em 3s.")
+            threading.Timer(3.0, self._restart_after_release).start()
+
     def stop(self):
         self.is_running = False
+        try:
+            if self.ad_manager and self.ad:
+                self.ad_manager.UnregisterAdvertisement(self.ad.get_path())
+        except Exception:
+            pass
 
     def register_ad_callback(self):
         print(f"[ADV] ✅ Anúncio registado com sucesso (hci{self.adapter_index})")

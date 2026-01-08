@@ -13,6 +13,10 @@ class ConnectionManager:
         self.my_nid = my_nid
         self.security_manager = security_manager
         self.adapter = self._get_adapter(adapter_index)
+        try:
+            print(f"[BLE] A usar adaptador (SimplePyBLE): {self.adapter.identifier()}")
+        except Exception:
+            pass
         self.uplink = None 
         self.uplink_info = {}
         self.router = None
@@ -26,8 +30,38 @@ class ConnectionManager:
 
     def _get_adapter(self, target_index):
         adapters = simplepyble.Adapter.get_adapters()
-        if not adapters: raise Exception("ERRO CRÍTICO: Bluetooth não encontrado.")
+        if not adapters:
+            raise Exception("ERRO CRÍTICO: Bluetooth não encontrado.")
+
+        want = f"hci{target_index}"
+        for a in adapters:
+            try:
+                if want in str(a.identifier()).lower():
+                    return a
+            except Exception:
+                continue
+
         return adapters[target_index] if target_index < len(adapters) else adapters[0]
+
+    def _call_with_timeout(self, fn, timeout_s, label):
+        result = {}
+        error = {}
+
+        def runner():
+            try:
+                result["value"] = fn()
+            except Exception as e:
+                error["exc"] = e
+
+        t = threading.Thread(target=runner, daemon=True)
+        t.start()
+        t.join(timeout_s)
+
+        if t.is_alive():
+            raise TimeoutError(f"Timeout em '{label}' ({timeout_s}s)")
+        if "exc" in error:
+            raise error["exc"]
+        return result.get("value")
 
     def find_and_connect_uplink(self):
         if self.uplink: return True
@@ -39,11 +73,13 @@ class ConnectionManager:
             device = candidate['device_obj']
             print(f"[CONNECT] A tentar {candidate['name']}...")
             try:
-                device.connect()
+                print("[CONNECT] A chamar device.connect()...")
+                self._call_with_timeout(device.connect, 20, "device.connect")
                 print("[DEBUG] Conectado! A aguardar estabilização (2s)...")
                 time.sleep(2) 
-                
-                services = device.services()
+
+                print("[CONNECT] A descobrir serviços (device.services())...")
+                services = self._call_with_timeout(device.services, 15, "device.services")
                 found_s = None
                 found_c = None
                 for s in services:
@@ -60,8 +96,12 @@ class ConnectionManager:
 
                 self.active_service_uuid = found_s
                 self.active_char_uuid = found_c
+                print("[BLE] A ativar notificações (device.notify)...")
                 device.notify(self.active_service_uuid, self.active_char_uuid, self._on_data_received_from_uplink)
                 print("[BLE] ✅ Notificações ativadas.")
+
+                # Mitiga corrida comum: o CCCD/notify pode demorar a ficar efetivo
+                time.sleep(0.5)
 
                 self.uplink = device
                 self.uplink_info = candidate
@@ -71,7 +111,8 @@ class ConnectionManager:
                 self.rx_buffer = bytearray()
                 self._start_handshake_thread()
                 return True
-            except:
+            except Exception as e:
+                print(f"[CONNECT] ❌ Falha a conectar/descobrir serviços em {candidate['name']}: {e}")
                 try: device.disconnect()
                 except: pass
         return False
@@ -115,7 +156,8 @@ class ConnectionManager:
                 chunk = full_payload[i : i + CHUNK_SIZE]
                 self.uplink.write_request(self.active_service_uuid, self.active_char_uuid, chunk)
                 time.sleep(0.15) 
-        except:
+        except Exception as e:
+            print(f"[BLE] ❌ write_request falhou (vai assumir uplink perdido): {e}")
             self.on_uplink_lost()
 
     def _on_data_received_from_uplink(self, data_bytes):
