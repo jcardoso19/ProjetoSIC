@@ -41,6 +41,7 @@ class SinkCore:
         self.bus = dbus.SystemBus()
         self.gatt_server = GATTServerManager(self.bus, adapter_index=0)
         self.gatt_server.set_data_callback(self.router.process_packet)
+        self.gatt_server.set_disconnect_callback(self.router.drop_connection)
         self.router.set_gatt_server(self.gatt_server)
         
         self.advertiser = NodeAdvertiser(SINK_NID, hops=0, adapter_index=0)

@@ -119,6 +119,7 @@ class Characteristic(dbus.service.Object):
         self.notifying = True
         print("[GATT] Notificações ativadas pelo cliente")
 
+    @dbus.service.method('org.bluez.GattCharacteristic1', in_signature='', out_signature='')
     def StopNotify(self):
         if not self.notifying: return
         self.notifying = False
@@ -138,6 +139,7 @@ class GATTServerManager:
     def __init__(self, bus, adapter_index=0):
         self.bus = bus
         self.app = Application(bus)
+        self._disconnect_callback = None
         
         self.sic_service = Service(bus, 0, SIC_SERVICE_UUID, True)
         
@@ -158,8 +160,43 @@ class GATTServerManager:
         except Exception as e:
             print(f"[GATT] ERRO CRÍTICO: Não consegui aceder ao adaptador {adapter_path}: {e}")
 
+        # Detecta disconnects (Device1.Connected -> False)
+        try:
+            self.bus.add_signal_receiver(
+                self._on_properties_changed,
+                dbus_interface='org.freedesktop.DBus.Properties',
+                signal_name='PropertiesChanged',
+                path_keyword='path',
+            )
+        except Exception as e:
+            print(f"[GATT] WARN: Não consegui registar listener de disconnect: {e}")
+
     def set_data_callback(self,callback):
         self.rx_char.set_callback(callback)
+
+    def set_disconnect_callback(self, callback):
+        """callback(mac_str) chamado quando org.bluez.Device1 Connected=false."""
+        self._disconnect_callback = callback
+
+    def _on_properties_changed(self, interface, changed, invalidated, path=None):
+        try:
+            if interface != 'org.bluez.Device1':
+                return
+            if 'Connected' not in changed:
+                return
+            if bool(changed.get('Connected')) is True:
+                return
+
+            device_mac = None
+            if path and 'dev_' in str(path):
+                device_mac = str(path).split('dev_')[-1].replace('_', ':')
+
+            if device_mac:
+                print(f"[GATT] Dispositivo desconectou: {device_mac}")
+                if self._disconnect_callback:
+                    self._disconnect_callback(device_mac)
+        except Exception:
+            pass
     
     def send_data(self,data_bytes):
         self.rx_char.SendNotification(data_bytes)

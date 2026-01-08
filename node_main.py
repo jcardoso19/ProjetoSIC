@@ -77,6 +77,7 @@ class NodeApp:
                 bus = dbus.SystemBus()
                 gatt_server = GATTServerManager(bus, adapter_index=ADAPTER_INDEX)
                 gatt_server.set_data_callback(self.router.process_packet)
+                gatt_server.set_disconnect_callback(self.router.drop_connection)
                 gatt_server.register()
                 self.router.set_gatt_server(gatt_server)
                 

@@ -160,3 +160,39 @@ class Router:
     def send_message(self, dest_nid, message):
         pkt = Packet(self.my_nid, dest_nid, message)
         self.forward(pkt)
+
+    def drop_connection(self, device_mac: str):
+        """Remove estado associado a um link BLE (downlink) que caiu."""
+        if not device_mac:
+            return
+
+        try:
+            if device_mac in self.downlink_keys:
+                del self.downlink_keys[device_mac]
+        except Exception:
+            pass
+
+        # Remover qualquer NID cujo forwarding apontava para este MAC
+        try:
+            to_remove = [nid for nid, conn in self.forwarding_table.items() if conn == device_mac]
+            for nid in to_remove:
+                try:
+                    del self.forwarding_table[nid]
+                except Exception:
+                    pass
+
+                try:
+                    del self.last_seq_nums[nid]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Limpar buffer RX associado ao MAC
+        try:
+            if device_mac in self.rx_buffers:
+                del self.rx_buffers[device_mac]
+        except Exception:
+            pass
+
+        # Não mexe em outgoing_seq_nums: é por ligação de saída (UPLINK ou conn_key)
