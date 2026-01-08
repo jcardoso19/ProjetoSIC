@@ -88,8 +88,9 @@ def scan_for_candidates(adapter, duration=4000):
             })
 
     print(f"   ------------------------------")
-    
-    candidates.sort(key=lambda x: x['rssi'], reverse=True)
+
+    # Preferência: menor número de hops, e em empate maior RSSI
+    candidates.sort(key=lambda x: (x.get('hops', 99), -x.get('rssi', -999)))
 
     if not candidates:
         print("   ❌ Nenhum dispositivo SIC encontrado.")
