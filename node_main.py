@@ -61,7 +61,6 @@ class NodeApp:
 
         self.advertiser = None 
         self.gatt_server_started = False
-        self.start_gatt_and_advertiser(hops=99)
 
     def safe_print(self, text):
         with self.log_lock:
