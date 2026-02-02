@@ -59,7 +59,8 @@ class NodeApp:
         self.hb_monitor = HeartbeatManager(self.on_uplink_death, interval=5)
         self.router.on_heartbeat = self.on_heartbeat_safe 
 
-        # Inicia Advertiser com Hops=99
+        self.advertiser = None 
+        self.gatt_server_started = False
         self.start_gatt_and_advertiser(hops=99)
 
     def safe_print(self, text):
@@ -109,9 +110,10 @@ class NodeApp:
         time.sleep(0.5)
 
     def on_uplink_death(self):
-        self.safe_print(f"\n{C_RED}[CRITICAL] UPLINK DEAD! A reiniciar estado...{C_END}")
+        self.safe_print(f"\n{C_RED}[CRITICAL] UPLINK DEAD! Parando Advertiser para novo scan...{C_END}")
+        if hasattr(self, 'advertiser') and self.advertiser:
+            self.advertiser.stop()
         self.reset_network_state()
-        self.start_gatt_and_advertiser(hops=99)
 
     def reset_network_state(self):
         self.manager.disconnect_all()
@@ -130,7 +132,6 @@ class NodeApp:
                 self.safe_print(f"{C_GREEN}[SYSTEM] Conexão Segura Estabelecida!{C_END}")
                 self.hb_monitor.start()
                 
-                # HOP COUNT DINÂMICO: Os meus hops = hops do pai + 1
                 my_new_hops = parent_hops + 1
                 self.safe_print(f"{C_BLUE}[TOPOLOGY] Hops atualizado: {parent_hops} -> {my_new_hops}{C_END}")
                 self.start_gatt_and_advertiser(hops=my_new_hops)
