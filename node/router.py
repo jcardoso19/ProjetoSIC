@@ -9,7 +9,7 @@ class Router:
         self.my_nid = my_nid
         self.connection_manager = connection_manager
         self.security_manager = security_manager
-        # Tabela: NID_Destino -> MAC_Vizinho (Next Hop)
+        self.send_lock = threading.Lock()
         self.forwarding_table = {} 
         self.downlink_keys = {} 
         self.gatt_server = None
@@ -100,36 +100,33 @@ class Router:
             except Exception as e: pass
 
     def forward(self, packet):
-        if packet.msg_type == MSG_TYPE_HEARTBEAT and packet.dest_nid in self.blocked_nids: return
+        with self.send_lock:
+            if packet.msg_type == MSG_TYPE_HEARTBEAT and packet.dest_nid in self.blocked_nids: return
+            target_conn = self.forwarding_table.get(packet.dest_nid)
+            if not target_conn:
+                target_conn = self.connection_manager.uplink
         
-        # Lógica de Forwarding: 
-        # 1. Tenta encontrar na tabela.
-        # 2. Se não estiver na tabela, manda para o UPLINK (Default Gateway).
-        target_conn = self.forwarding_table.get(packet.dest_nid)
-        if not target_conn:
-            target_conn = self.connection_manager.uplink
-        
-        if not target_conn: return # Packet drop (nowhere to go)
+            if not target_conn: return # Packet drop (nowhere to go)
 
-        if packet.msg_type not in [MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK]:
-            self.routed_messages_count += 1
-            conn_key = target_conn if isinstance(target_conn, str) else "UPLINK"
-            packet.seq_num = self.outgoing_seq_nums.get(conn_key, 0) + 1
-            self.outgoing_seq_nums[conn_key] = packet.seq_num
-            key = self._get_key_for_connection(target_conn)
-            if key: self.security_manager.encrypt_packet(key, packet)
+            if packet.msg_type not in [MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK]:
+                self.routed_messages_count += 1
+                conn_key = target_conn if isinstance(target_conn, str) else "UPLINK"
+                packet.seq_num = self.outgoing_seq_nums.get(conn_key, 0) + 1
+                self.outgoing_seq_nums[conn_key] = packet.seq_num
+                key = self._get_key_for_connection(target_conn)
+                if key: self.security_manager.encrypt_packet(key, packet)
 
-        data_bytes = packet.to_bytes()
-        full_payload = len(data_bytes).to_bytes(4, 'big') + data_bytes
-        CHUNK_SIZE = 100
+            data_bytes = packet.to_bytes()
+            full_payload = len(data_bytes).to_bytes(4, 'big') + data_bytes
+            CHUNK_SIZE = 100
 
-        if isinstance(target_conn, str): 
-            if self.gatt_server:
-                for i in range(0, len(full_payload), CHUNK_SIZE):
-                    self.gatt_server.send_data(full_payload[i : i + CHUNK_SIZE])
-                    time.sleep(0.15)
-        else: 
-            self.connection_manager.send_packet(packet)
+            if isinstance(target_conn, str): 
+                if self.gatt_server:
+                    for i in range(0, len(full_payload), CHUNK_SIZE):
+                        self.gatt_server.send_data(full_payload[i : i + CHUNK_SIZE])
+                        time.sleep(0.15)
+            else: 
+                self.connection_manager.send_packet(packet)
             
     def propagate_heartbeat(self, original_packet):
         for mac_conn in self.downlink_keys.keys():

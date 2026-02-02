@@ -115,6 +115,7 @@ class NodeApp:
         self.reset_network_state()
 
     def reset_network_state(self):
+        self.router.last_seq_nums.clear()
         if hasattr(self, 'hb_monitor'):
             self.hb_monitor.stop()
             self.hb_monitor.missed_count = 0
