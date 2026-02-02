@@ -5,11 +5,7 @@ class HeartbeatManager:
     def __init__(self, callback_on_death, interval=5):
         self.callback_on_death = callback_on_death
         self.interval = interval
-        
-        # [ALTERADO] Tolerância fixa de 5s para evitar desconexão 
-        # durante handshakes pesados (envio de certificados)
-        self.tolerance = 5 
-        
+        self.tolerance = (interval * 0.2) + 2 
         self.running = False
         self.thread = None
         self.last_heartbeat_time = time.time()
