@@ -15,7 +15,6 @@ class ConnectionManager:
         self.adapter = self._get_adapter(adapter_index)
         try: print(f"[BLE] Adapter: {self.adapter.identifier()}")
         except: pass
-        
         self.uplink = None 
         self.uplink_info = {}
         self.router = None
@@ -120,8 +119,8 @@ class ConnectionManager:
                 print("[HANDSHAKE] ⚠️ Falha no envio.")
                 time.sleep(2)
             else:
-                # Esperar ACK (8s)
-                for _ in range(80):
+                # Esperar ACK (10s)
+                for _ in range(100):
                     if self.session_key or not self.uplink: break
                     time.sleep(0.1)
             
@@ -138,7 +137,6 @@ class ConnectionManager:
         try:
             data_bytes = packet.to_bytes()
             full_payload = len(data_bytes).to_bytes(4, 'big') + data_bytes
-            
             CHUNK_SIZE = 20 
             total_len = len(full_payload)
             
@@ -151,14 +149,14 @@ class ConnectionManager:
                         success = True
                         break
                     except: time.sleep(0.2)
-                
                 if not success: return False
                 time.sleep(0.05)
             return True
         except: return False
 
     def _on_data_received_from_uplink(self, data_bytes):
-        # print(f"[BLE-RX] {len(data_bytes)} bytes") # Descomentar para debug extremo
+        # DEBUG ATIVO: Ver se chegam dados
+        print(f"[RX-DEBUG] Recebi {len(data_bytes)} bytes") 
         try:
             self.rx_buffer.extend(data_bytes)
             while len(self.rx_buffer) >= 4:
@@ -203,4 +201,4 @@ class ConnectionManager:
         if self.uplink:
             try: self.uplink.disconnect()
             except: pass
-        self.uplink = None
+        self.uplink = None  
