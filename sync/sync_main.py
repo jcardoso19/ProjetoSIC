@@ -19,7 +19,7 @@ class SinkMain:
         dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
         self.bus = dbus.SystemBus()
         self.loop = GLib.MainLoop()
-        self.rx_buffer = bytearray() # Buffer de re-montagem
+        self.rx_buffer = bytearray() 
 
         try:
             self.sec_manager = SecurityManager("certs/root_ca.crt", "certs/sink.crt", "certs/sink.key")
@@ -34,7 +34,6 @@ class SinkMain:
             self.gatt_server.set_data_callback(self.on_data_received)
         except Exception as e: print(f"[ERRO] GATT: {e}")
 
-        # Advertiser do Sink (Hops=0)
         self.advertiser = NodeAdvertiser("SINK_DEVICE", hops=0)
         
         self.loop_thread = threading.Thread(target=self.loop.run, daemon=True)
@@ -57,23 +56,19 @@ class SinkMain:
             self.loop.quit()
 
     def send_packet_to_mesh(self, packet):
-        """Envia pacotes de forma segura e lenta para não saturar o Nó."""
         try:
             data_bytes = packet.to_bytes()
-            # ADICIONAR CABEÇALHO (CRÍTICO)
             full_payload = len(data_bytes).to_bytes(4, 'big') + data_bytes
             
             CHUNK_SIZE = 20
-            total = len(full_payload)
-            for i in range(0, total, CHUNK_SIZE):
+            for i in range(0, len(full_payload), CHUNK_SIZE):
                 self.gatt_server.send_data(full_payload[i : i + CHUNK_SIZE])
-                # PAUSA MAIOR (0.1s) PARA O NÓ PROCESSAR
-                time.sleep(0.1) 
+                time.sleep(0.02) 
         except Exception as e:
             print(f"[TX] Erro: {e}")
 
-    def on_data_received(self, data_bytes):
-        """Remonta pacotes fragmentados recebidos do Nó."""
+    # FIX: Aceitar *args para ignorar o device_mac se for passado
+    def on_data_received(self, data_bytes, *args):
         self.rx_buffer.extend(data_bytes)
         while len(self.rx_buffer) >= 4:
             msg_len = int.from_bytes(self.rx_buffer[:4], 'big')
@@ -89,13 +84,14 @@ class SinkMain:
             if not packet: return
 
             if packet.msg_type == MSG_TYPE_HELLO:
-                print(f"[SEC] 🤝 Handshake recebido de {packet.source_nid}")
+                print(f"[SEC] 🤝 Handshake de {packet.source_nid}")
                 if self.sec_manager:
                     cert_payload = self.sec_manager.local_cert_pem.decode('utf-8')
                     response = Packet("SINK", packet.source_nid, cert_payload, MSG_TYPE_HELLO_ACK)
-                    print(f"[SEC] A enviar HELLO_ACK para {packet.source_nid}...")
                     self.send_packet_to_mesh(response)
-                    print(f"[SEC] ✅ HELLO_ACK enviado.")
+                    print(f"[SEC] ✅ ACK enviado para {packet.source_nid}")
+            elif packet.msg_type == MSG_TYPE_HEARTBEAT:
+                pass # Ignorar meus proprios HBs se entrarem em loop
             else:
                 print(f"[MSG] Recebido '{packet.msg_type}' de {packet.source_nid}")
         except Exception as e:
@@ -112,7 +108,7 @@ class SinkMain:
                     payload = json.dumps({"val": val, "sig": sig})
                     pkt = Packet("SINK", "BROADCAST", payload, MSG_TYPE_HEARTBEAT, seq_num=seq)
                     self.send_packet_to_mesh(pkt)
-                    print(f"[HB] 💓 #{seq} enviado.")
+                    # print(f"[HB] 💓 #{seq} enviado.") 
                 except: pass
             time.sleep(5)
 

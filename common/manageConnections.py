@@ -5,7 +5,6 @@ import os
 from common.scan import scan_for_candidates
 from common.protocol import Packet, MSG_TYPE_HELLO, MSG_TYPE_DATA, MSG_TYPE_HELLO_ACK
 
-# UUIDs do Serviço SIC
 REF_SERVICE_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CD"
 REF_CHAR_UUID    = "A07498CA-AD5B-474E-940D-16F1FBE7E8CE"
 
@@ -14,8 +13,7 @@ class ConnectionManager:
         self.my_nid = my_nid
         self.security_manager = security_manager
         self.adapter = self._get_adapter(adapter_index)
-        try:
-            print(f"[BLE] A usar adaptador: {self.adapter.identifier()}")
+        try: print(f"[BLE] Adapter: {self.adapter.identifier()}")
         except: pass
         
         self.uplink = None 
@@ -31,7 +29,7 @@ class ConnectionManager:
 
     def _get_adapter(self, target_index):
         adapters = simplepyble.Adapter.get_adapters()
-        if not adapters: raise Exception("ERRO CRÍTICO: Bluetooth não encontrado.")
+        if not adapters: raise Exception("Bluetooth não encontrado.")
         want = f"hci{target_index}"
         for a in adapters:
             if want in str(a.identifier()).lower(): return a
@@ -45,7 +43,7 @@ class ConnectionManager:
         t = threading.Thread(target=runner, daemon=True)
         t.start()
         t.join(timeout_s)
-        if t.is_alive(): raise TimeoutError(f"Timeout em {label}")
+        if t.is_alive(): raise TimeoutError(f"Timeout {label}")
         if "error" in result: raise result["error"]
         return result.get("value")
 
@@ -60,7 +58,7 @@ class ConnectionManager:
             print(f"[CONNECT] A tentar {candidate['name']}...")
             try:
                 self._call_with_timeout(device.connect, 15, "Connect")
-                time.sleep(2.0) # Estabilização crítica
+                time.sleep(2.0)
 
                 print("[CONNECT] A descobrir serviços...")
                 services = self._call_with_timeout(device.services, 10, "Services")
@@ -75,7 +73,6 @@ class ConnectionManager:
                         break
                 
                 if not found_s or not found_c:
-                    print("[CONNECT] Serviço SIC em falta.")
                     device.disconnect()
                     continue
 
@@ -84,7 +81,7 @@ class ConnectionManager:
                 
                 print("[BLE] A ativar notificações...")
                 device.notify(found_s, found_c, self._on_data_received_from_uplink)
-                time.sleep(1.0) # Estabilização pós-notify
+                time.sleep(1.0)
                 print("[BLE] ✅ Notificações ativadas.")
 
                 self.uplink = device
@@ -95,7 +92,7 @@ class ConnectionManager:
                 self._start_handshake_thread()
                 return True
             except Exception as e:
-                print(f"[CONNECT] ❌ Erro: {e}")
+                print(f"[CONNECT] Erro: {e}")
                 try: device.disconnect()
                 except: pass
         return False
@@ -120,19 +117,18 @@ class ConnectionManager:
             hello_pkt = Packet(self.my_nid, "UPLINK", cert_pem.decode('utf-8'), MSG_TYPE_HELLO)
             
             if not self.send_packet(hello_pkt):
-                print("[HANDSHAKE] ⚠️ Falha no envio. A tentar de novo em 2s...")
+                print("[HANDSHAKE] ⚠️ Falha no envio.")
                 time.sleep(2)
             else:
-                # Esperar ACK (até 8s)
+                # Esperar ACK (8s)
                 for _ in range(80):
                     if self.session_key or not self.uplink: break
                     time.sleep(0.1)
             
             if self.session_key: break
-
             attempt += 1
             if attempt > 10:
-                print("[HANDSHAKE] ❌ Sink não responde.")
+                print("[HANDSHAKE] ❌ Sem resposta do Sink.")
                 self.on_uplink_lost()
                 return
             time.sleep(1.0)
@@ -143,13 +139,11 @@ class ConnectionManager:
             data_bytes = packet.to_bytes()
             full_payload = len(data_bytes).to_bytes(4, 'big') + data_bytes
             
-            # --- MODO SEGURO: 20 Bytes ---
             CHUNK_SIZE = 20 
             total_len = len(full_payload)
             
             for i in range(0, total_len, CHUNK_SIZE):
                 chunk = full_payload[i : i + CHUNK_SIZE]
-                
                 success = False
                 for r in range(3):
                     try:
@@ -159,11 +153,12 @@ class ConnectionManager:
                     except: time.sleep(0.2)
                 
                 if not success: return False
-                time.sleep(0.05) # Pausa entre chunks
+                time.sleep(0.05)
             return True
         except: return False
 
     def _on_data_received_from_uplink(self, data_bytes):
+        # print(f"[BLE-RX] {len(data_bytes)} bytes") # Descomentar para debug extremo
         try:
             self.rx_buffer.extend(data_bytes)
             while len(self.rx_buffer) >= 4:
