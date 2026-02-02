@@ -115,13 +115,22 @@ class NodeApp:
         self.reset_network_state()
 
     def reset_network_state(self):
+        if hasattr(self, 'hb_monitor'):
+            self.hb_monitor.stop()
+            self.hb_monitor.missed_count = 0
+        
         self.manager.disconnect_all()
+        
         self.manager.uplink = None
         self.manager.session_key = None
         self.dtls_manager.sessions.clear() 
         self.router.forwarding_table.clear()
         self.router.downlink_keys.clear()
-        self.hb_monitor.missed_count = 0
+        
+        if hasattr(self, 'advertiser') and self.advertiser:
+            self.advertiser.stop()
+            
+        self.safe_print(f"{C_YELLOW}[SYSTEM] Estado de rede resetado.{C_END}")
 
     def wait_for_secure_connection(self, parent_hops):
         self.safe_print(f"{C_YELLOW}[SYSTEM] A aguardar Handshake Link-Layer...{C_END}")
@@ -245,7 +254,6 @@ class NodeApp:
                 elif cmd == "disc":
                     self.safe_print(f"{C_YELLOW}A desligar...{C_END}")
                     self.reset_network_state()
-                    self.on_uplink_death()
                 elif cmd == "cls":
                     self.draw_ui()
                 elif cmd == "q":
