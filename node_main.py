@@ -115,12 +115,21 @@ class NodeApp:
         self.reset_network_state()
 
     def reset_network_state(self):
+        """Reinicia todo o estado da rede, incluindo buffers do Router."""
         self.manager.disconnect_all()
         self.manager.uplink = None
         self.manager.session_key = None
         self.dtls_manager.sessions.clear() 
         self.router.forwarding_table.clear()
         self.router.downlink_keys.clear()
+        
+        # --- [CORREÇÃO CRÍTICA] Limpar contadores de sequência ---
+        # Isto evita que o próximo nó rejeite nossos pacotes como "ataque de repetição"
+        self.router.last_seq_nums.clear()
+        self.router.outgoing_seq_nums.clear()
+        self.router.rx_buffers.clear()
+        # ---------------------------------------------------------
+        
         self.hb_monitor.missed_count = 0
 
     def wait_for_secure_connection(self, parent_hops):
@@ -134,8 +143,6 @@ class NodeApp:
                 my_new_hops = parent_hops + 1
                 self.safe_print(f"{C_BLUE}[TOPOLOGY] Hops atualizado: {parent_hops} -> {my_new_hops}{C_END}")
                 self.start_gatt_and_advertiser(hops=my_new_hops)
-                self.safe_print(f"{C_CYAN}[DTLS] A estabelecer canal seguro automático com {SINK_NID}...{C_END}")
-                self.dtls_manager.start_handshake(SINK_NID)
                 return True 
             time.sleep(0.5)
         return False
