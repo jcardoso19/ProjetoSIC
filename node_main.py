@@ -33,7 +33,7 @@ else: ADAPTER_INDEX = 0
 CERT_PATH = f"certs/{MY_NID}.crt"
 KEY_PATH = f"certs/{MY_NID}.key"
 ROOT_CA_PATH = "certs/root_ca.crt"
-SINK_NID = "SINK" 
+SINK_NID = "sink" 
 
 class NodeApp:
     def __init__(self):
@@ -227,9 +227,10 @@ class NodeApp:
                     else:
                         txt = " ".join(parts[1:])
                         if SINK_NID not in self.dtls_manager.sessions:
-                             self.safe_print(f"{C_YELLOW}[DTLS] A iniciar sessão E2E...{C_END}")
-                             self.dtls_manager.start_handshake(SINK_NID)
-                             time.sleep(2) 
+                            self.safe_print(f"{C_YELLOW}[DTLS] A iniciar sessão E2E com {SINK_NID}...{C_END}")
+                            self.dtls_manager.start_handshake(SINK_NID)
+                            self.safe_print(f"{C_YELLOW}[DTLS] Aguarde a confirmação da sessão antes de enviar a mensagem.{C_END}")
+                            return
                         self.dtls_manager.send_data(SINK_NID, txt)
 
                 elif cmd == "who":
