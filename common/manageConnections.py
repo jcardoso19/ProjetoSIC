@@ -68,7 +68,7 @@ class ConnectionManager:
         """Lógica comum de conexão (Blindada)."""
         try:
             self._call_with_timeout(device.connect, 15, "Connect")
-            time.sleep(2.0) 
+            time.sleep(0.5) 
 
             services = self._call_with_timeout(device.services, 10, "Services")
             found_s = None
@@ -97,7 +97,7 @@ class ConnectionManager:
                 device.disconnect()
                 return False
                 
-            time.sleep(1.5) 
+            time.sleep(0.2) 
             print("[BLE] ✅ Notificações ativadas.")
 
             self.uplink = device
@@ -154,7 +154,7 @@ class ConnectionManager:
         try:
             data_bytes = packet.to_bytes()
             full_payload = len(data_bytes).to_bytes(4, 'big') + data_bytes
-            CHUNK_SIZE = 20 
+            CHUNK_SIZE = 100
             total_len = len(full_payload)
             for i in range(0, total_len, CHUNK_SIZE):
                 chunk = full_payload[i : i + CHUNK_SIZE]
@@ -166,7 +166,7 @@ class ConnectionManager:
                         break
                     except Exception as e: time.sleep(0.2)
                 if not success: return False
-                time.sleep(0.05)
+                time.sleep(0.01)
             return True
         except: return False
 
