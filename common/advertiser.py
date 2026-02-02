@@ -20,8 +20,8 @@ class TestAdvertisement(dbus.service.Object):
     PATH_BASE = '/org/bluez/example/advertisement'
 
     def __init__(self, bus, index, advertising_type, local_name, hops, release_callback=None):
-        # CORREÇÃO: Usar um ID único para evitar conflito de path no DBus
-        self.path = self.PATH_BASE + str(index) + "_" + str(random.randint(1000,9999))
+        # FIX: Path único para evitar colisão
+        self.path = self.PATH_BASE + str(index) + "_" + str(random.randint(10000,99999))
         self.bus = bus
         self.ad_type = advertising_type
         self.local_name = local_name
@@ -35,30 +35,23 @@ class TestAdvertisement(dbus.service.Object):
     def get_properties(self):
         properties = dict()
         properties['Type'] = dbus.String(self.ad_type)
-        if self.local_name:
-            properties['LocalName'] = dbus.String(self.local_name)
-        if self.service_uuids:
-            properties['ServiceUUIDs'] = dbus.Array(self.service_uuids, signature='s')
-        if self.manufacturer_data:
-            properties['ManufacturerData'] = dbus.Dictionary(self.manufacturer_data, signature='qv')
+        if self.local_name: properties['LocalName'] = dbus.String(self.local_name)
+        if self.service_uuids: properties['ServiceUUIDs'] = dbus.Array(self.service_uuids, signature='s')
+        if self.manufacturer_data: properties['ManufacturerData'] = dbus.Dictionary(self.manufacturer_data, signature='qv')
         properties['Discoverable'] = dbus.Boolean(True)
         properties['Includes'] = dbus.Array(["tx-power"], signature='s')
         return properties
 
-    def get_path(self):
-        return dbus.ObjectPath(self.path)
+    def get_path(self): return dbus.ObjectPath(self.path)
 
     @dbus.service.method(DBUS_PROP_IFACE, in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface):
-        if interface != LE_ADVERTISEMENT_IFACE:
-            raise InvalidArgsException()
+        if interface != LE_ADVERTISEMENT_IFACE: raise InvalidArgsException()
         return self.get_properties()
 
     @dbus.service.method(LE_ADVERTISEMENT_IFACE, in_signature='', out_signature='')
-    def Release(self):
-        print(f'[ADV] {self.path}: Advertising Released.')
-        if self.release_callback:
-            self.release_callback()
+    def Release(self): 
+        if self.release_callback: self.release_callback()
 
 class NodeAdvertiser:
     def __init__(self, advertiser_name, hops=99, adapter_index=0):
@@ -71,29 +64,19 @@ class NodeAdvertiser:
         self.is_running = False
 
     async def run(self):
-        target_adapter = f"hci{self.adapter_index}"
-        # print(f"[ADVERTISER] A configurar em {target_adapter} (Hops: {self.hops})...")
-        
-        # Obter bus dentro da thread atual se não existir
-        try:
-            self.bus = dbus.SystemBus()
-        except:
+        try: self.bus = dbus.SystemBus()
+        except: 
             dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
             self.bus = dbus.SystemBus()
 
-        adapter_props = self.find_adapter(self.bus, target_adapter)
-        if not adapter_props:
-            print(f"[ADVERTISER] ERRO: Adaptador {target_adapter} não encontrado!")
+        target_adapter = f"hci{self.adapter_index}"
+        adapter_path = self.find_adapter(self.bus, target_adapter)
+        if not adapter_path: 
+            print(f"[ADV] Erro: {target_adapter} não encontrado.")
             return
 
-        adapter_path = adapter_props.object_path
-
-        self.ad_manager = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path),
-                                         LE_ADVERTISING_MANAGER_IFACE)
-
-        # Criar novo anúncio
-        self.ad = TestAdvertisement(self.bus, 0, 'peripheral', self.name, self.hops, release_callback=self._handle_release)
-
+        self.ad_manager = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path), LE_ADVERTISING_MANAGER_IFACE)
+        self.ad = TestAdvertisement(self.bus, 0, 'peripheral', self.name, self.hops, release_callback=None)
         self._register()
 
     def _register(self):
@@ -102,33 +85,21 @@ class NodeAdvertiser:
                                                   reply_handler=self.register_ad_callback,
                                                   error_handler=self.register_ad_error_callback)
             self.is_running = True
-        except Exception as e:
-            print(f"[ADVERTISER] Falha ao registar: {e}")
-
-    def _handle_release(self):
-        if not self.is_running: return
-        # print("[ADV] Libertado pelo sistema.")
+        except Exception as e: print(f"[ADV] Erro registo: {e}")
 
     def stop(self):
         self.is_running = False
         try:
             if self.ad_manager and self.ad:
                 self.ad_manager.UnregisterAdvertisement(self.ad.get_path())
-                print("[ADV] Anúncio parado.")
-        except Exception:
-            pass
+        except: pass
 
-    def register_ad_callback(self):
-        print(f"[ADV] ✅ Anúncio Ativo (Hops: {self.hops})")
-
-    def register_ad_error_callback(self, uuid):
-        print(f'[ADVERTISER] Erro ao registar: {uuid}')
+    def register_ad_callback(self): print(f"[ADV] ✅ Anúncio Ativo (Hops: {self.hops})")
+    def register_ad_error_callback(self, uuid): print(f'[ADV] Erro callback: {uuid}')
 
     def find_adapter(self, bus, target_name):
         remote_om = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, '/'), DBUS_OM_IFACE)
         objects = remote_om.GetManagedObjects()
-        
         for o, props in objects.items():
-            if LE_ADVERTISING_MANAGER_IFACE in props and f"/{target_name}" in o:
-                return bus.get_object(BLUEZ_SERVICE_NAME, o)
+            if LE_ADVERTISING_MANAGER_IFACE in props and f"/{target_name}" in o: return o
         return None
