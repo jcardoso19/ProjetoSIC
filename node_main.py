@@ -134,6 +134,8 @@ class NodeApp:
                 my_new_hops = parent_hops + 1
                 self.safe_print(f"{C_BLUE}[TOPOLOGY] Hops atualizado: {parent_hops} -> {my_new_hops}{C_END}")
                 self.start_gatt_and_advertiser(hops=my_new_hops)
+                self.safe_print(f"{C_CYAN}[DTLS] A estabelecer canal seguro automático com {SINK_NID}...{C_END}")
+                self.dtls_manager.start_handshake(SINK_NID)
                 return True 
             time.sleep(0.5)
         return False
