@@ -53,7 +53,7 @@ class NodeApp:
         self.manager = ConnectionManager(self.sec_manager, adapter_index=ADAPTER_INDEX, my_nid=MY_NID)
         self.router = Router(MY_NID, self.manager, self.sec_manager)
         self.manager.set_router(self.router)
-        self.dtls_manager = DTLSManager(MY_NID, self.sec_manager, self.router.send_message)
+        self.dtls_manager = DTLSManager(MY_NID, self.sec_manager, self.router.forward)
         
         self.router.set_app_callback(self.on_app_message)
         self.hb_monitor = HeartbeatManager(self.on_uplink_death, interval=5)
