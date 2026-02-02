@@ -15,6 +15,7 @@ from common.gatt_server import GATTServerManager
 from common.advertiser import NodeAdvertiser
 from common.dtls import DTLSManager
 from common.scan import scan_for_candidates
+from common.protocol import Packet, MSG_TYPE_DATA, MSG_TYPE_E2E_DATA, MSG_TYPE_E2E_HELLO, MSG_TYPE_E2E_HELLO_ACK
 
 C_BOLD = "\033[1m"
 C_GREEN = "\033[92m"
@@ -24,209 +25,236 @@ C_RED = "\033[91m"
 C_CYAN = "\033[96m"
 C_END = "\033[0m"
 
-
-if len(sys.argv) > 1:
-    MY_NID = sys.argv[1]
-else:
-    MY_NID = "node1"
-
-if len(sys.argv) > 2:
-    ADAPTER_INDEX = int(sys.argv[2])
-else:
-    ADAPTER_INDEX = 0 
-
-print(f"{C_BOLD}[CONFIG] A iniciar {MY_NID} na interface hci{ADAPTER_INDEX}...{C_END}")
-
+if len(sys.argv) > 1: MY_NID = sys.argv[1]
+else: MY_NID = "node1"
+if len(sys.argv) > 2: ADAPTER_INDEX = int(sys.argv[2])
+else: ADAPTER_INDEX = 0 
 
 CERT_PATH = f"certs/{MY_NID}.crt"
 KEY_PATH = f"certs/{MY_NID}.key"
 ROOT_CA_PATH = "certs/root_ca.crt"
-SINK_NID = "sink"
+SINK_NID = "SINK" 
 
 class NodeApp:
     def __init__(self):
         self.running = True
-        self.last_handshake_attempt = 0
-        self.my_client_id = random.randint(1000, 9999)
-        
+        self.prompt_text = f"{C_BOLD}{C_GREEN}node@{MY_NID}# {C_END}"
+        self.log_lock = threading.Lock()
+        self.current_hops = 99 # Estado inicial: Desconectado
+
         print(f"{C_BOLD}{C_BLUE}[SYSTEM] A inicializar Node: {MY_NID}...{C_END}")
 
         try:
             self.sec_manager = SecurityManager(ROOT_CA_PATH, CERT_PATH, KEY_PATH)
         except Exception as e:
-            print(f"{C_RED}[ERRO] Falha na Segurança: {e}{C_END}")
-            print(f"{C_RED}       Verifica se criaste as chaves para {MY_NID}!{C_END}")
+            self.safe_print(f"{C_RED}[ERRO] Falha na Segurança: {e}{C_END}")
             sys.exit(1)
 
         self.manager = ConnectionManager(self.sec_manager, adapter_index=ADAPTER_INDEX, my_nid=MY_NID)
-        
         self.router = Router(MY_NID, self.manager, self.sec_manager)
         self.manager.set_router(self.router)
-
-        self.dtls_manager = DTLSManager(MY_NID, self.sec_manager, self.router.forward)
-        self.router.set_app_callback(self.dtls_manager.process_packet)
-
-        self.hb_monitor = HeartbeatManager(self.manager.on_uplink_lost, interval=5)
-        self.router.on_heartbeat = lambda nid: self.hb_monitor.heartbeat_received()
+        self.dtls_manager = DTLSManager(MY_NID, self.sec_manager, self.router.send_message)
         
-        self.setup_gatt_server()
+        self.router.set_app_callback(self.on_app_message)
+        self.hb_monitor = HeartbeatManager(self.on_uplink_death, interval=5)
+        self.router.on_heartbeat = self.on_heartbeat_safe 
 
-    def setup_gatt_server(self):
-        def run_gatt():
+        # Inicia Advertiser com Hops=99
+        self.start_gatt_and_advertiser(hops=99)
+
+    def safe_print(self, text):
+        with self.log_lock:
+            sys.stdout.write(f"\r\033[K{text}\n")
+            sys.stdout.write(self.prompt_text)
+            sys.stdout.flush()
+
+    def on_heartbeat_safe(self, nid):
+        self.hb_monitor.heartbeat_received()
+        # Não imprimimos para não poluir, mas o sistema sabe que está vivo
+
+    def on_app_message(self, packet):
+        if packet.msg_type in [MSG_TYPE_DATA, MSG_TYPE_E2E_DATA, MSG_TYPE_E2E_HELLO, MSG_TYPE_E2E_HELLO_ACK]:
+            decrypted = self.dtls_manager.process_packet(packet)
+            if decrypted and isinstance(decrypted, str):
+                 self.safe_print(f"{C_GREEN}[APP] 📩 MENSAGEM de {packet.source_nid}: {decrypted}{C_END}")
+
+    def start_gatt_and_advertiser(self, hops):
+        self.current_hops = hops
+        if hasattr(self, 'advertiser') and self.advertiser:
+            try: self.advertiser.stop()
+            except: pass
+
+        def run_gatt_loop():
             try:
                 bus = dbus.SystemBus()
-                gatt_server = GATTServerManager(bus, adapter_index=ADAPTER_INDEX)
-                gatt_server.set_data_callback(self.router.process_packet)
-                gatt_server.set_disconnect_callback(self.router.drop_connection)
-                gatt_server.register()
-                self.router.set_gatt_server(gatt_server)
-                
-                advertiser = NodeAdvertiser(MY_NID, hops=99, adapter_index=ADAPTER_INDEX)
-                
+                if not getattr(self, 'gatt_server_started', False):
+                    gatt_server = GATTServerManager(bus, adapter_index=ADAPTER_INDEX)
+                    gatt_server.set_data_callback(self.router.process_packet)
+                    gatt_server.set_disconnect_callback(self.router.drop_connection)
+                    gatt_server.register()
+                    self.router.set_gatt_server(gatt_server)
+                    self.gatt_server_started = True
+
+                self.advertiser = NodeAdvertiser(MY_NID, hops=hops, adapter_index=ADAPTER_INDEX)
                 loop = GLib.MainLoop()
-                async def start_ad(): await advertiser.run()
+                async def start_ad(): await self.advertiser.run()
                 new_loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(new_loop)
                 new_loop.run_until_complete(start_ad())
                 loop.run()
-            except Exception as e:
-                print(f"{C_RED}[GATT] Erro fatal: {e}{C_END}")
+            except: pass
 
-        threading.Thread(target=run_gatt, daemon=True).start()
-        time.sleep(1)
+        t = threading.Thread(target=run_gatt_loop, daemon=True)
+        t.start()
+        time.sleep(0.5)
 
-    def wait_for_secure_connection(self):
-        print(f"{C_YELLOW}[SYSTEM] A aguardar Handshake de Segurança... (Aguarde){C_END}")
-        
-        for _ in range(180):
-            if not self.running or not self.manager.uplink:
-                print(f"{C_RED}[SYSTEM] Ligação perdida durante a negociação.{C_END}")
-                return False
-            
+    def on_uplink_death(self):
+        self.safe_print(f"\n{C_RED}[CRITICAL] UPLINK DEAD! A reiniciar estado...{C_END}")
+        self.reset_network_state()
+        self.start_gatt_and_advertiser(hops=99)
+
+    def reset_network_state(self):
+        self.manager.disconnect_all()
+        self.manager.uplink = None
+        self.manager.session_key = None
+        self.dtls_manager.sessions.clear() 
+        self.router.forwarding_table.clear()
+        self.router.downlink_keys.clear()
+        self.hb_monitor.missed_count = 0
+
+    def wait_for_secure_connection(self, parent_hops):
+        self.safe_print(f"{C_YELLOW}[SYSTEM] A aguardar Handshake Link-Layer...{C_END}")
+        for _ in range(60):
+            if not self.manager.uplink: return False
             if self.manager.session_key:
-                print(f"{C_GREEN}[SYSTEM] Segurança confirmada.{C_END}")
-                
-                print(f"{C_GREEN}[SYSTEM] A iniciar Monitor de Heartbeats.{C_END}")
+                self.safe_print(f"{C_GREEN}[SYSTEM] Conexão Segura Estabelecida!{C_END}")
                 self.hb_monitor.start()
                 
-                if SINK_NID not in self.dtls_manager.sessions:
-                    self.dtls_manager.start_handshake(SINK_NID)
-                
+                # HOP COUNT DINÂMICO: Os meus hops = hops do pai + 1
+                my_new_hops = parent_hops + 1
+                self.safe_print(f"{C_BLUE}[TOPOLOGY] Hops atualizado: {parent_hops} -> {my_new_hops}{C_END}")
+                self.start_gatt_and_advertiser(hops=my_new_hops)
                 return True 
-            
             time.sleep(0.5)
-            
-        print(f"{C_RED}[SYSTEM] Timeout: O Handshake falhou (Sink incontactável).{C_END}")
-        self.manager.disconnect_all()
         return False
+
+    def scan_and_select(self):
+        """Permite ao utilizador ESCOLHER a quem se quer ligar."""
+        self.safe_print("A procurar candidatos...")
+        candidates = scan_for_candidates(self.manager.adapter)
+        
+        if not candidates:
+            self.safe_print("Nenhum nó encontrado.")
+            return None, 99
+
+        print(f"\n{C_BOLD}--- CANDIDATOS DISPONÍVEIS ---{C_END}")
+        valid_indices = []
+        for i, cand in enumerate(candidates):
+            hops_str = cand.get('hops', '?')
+            print(f"[{i}] {cand['name']} (Hops: {hops_str}) | RSSI: {cand['rssi']}")
+            valid_indices.append(i)
+        print("------------------------------")
+        
+        # Input Bloqueante (Simples)
+        while True:
+            try:
+                choice = input("Escolha o índice (ou 'c' para cancelar): ")
+                if choice.lower() == 'c': return None, 99
+                idx = int(choice)
+                if idx in valid_indices:
+                    return candidates[idx], candidates[idx].get('hops', 99)
+            except: pass
+            print("Inválido.")
 
     def draw_ui(self):
         os.system('clear' if os.name == 'posix' else 'cls')
-        
-        if self.manager.uplink:
-            conn_txt = f"{C_GREEN}CONNECTED 🔗{C_END}"
-        else:
-            conn_txt = f"{C_RED}DISCONNECTED ❌{C_END}"
-
-        is_secured = getattr(self.router, 'is_secured', False)
-
-        if is_secured:
-            sec_txt = f"{C_GREEN}ACTIVE 🔒{C_END}"
-        elif self.manager.uplink:
-            sec_txt = f"{C_YELLOW}HANDSHAKING... ⏳{C_END}"
-        else:
-            sec_txt = f"{C_RED}OFFLINE 🚫{C_END}"
-
-        print(f"{C_BOLD}{C_CYAN}═"*60)
+        print(f"{C_BOLD}{C_CYAN}════"*15 + f"{C_END}")
         print(f"       SIC PROTOCOL - NODE TERMINAL")
-        print(f"       Node ID: {MY_NID} | Adapter: hci{ADAPTER_INDEX}")
-        print("═"*60 + f"{C_END}")
+        print(f"       Node ID: {MY_NID} | Hops: {self.current_hops}")
+        print(f"{C_BOLD}{C_CYAN}════"*15 + f"{C_END}")
         
-        print(f"  📡  LINK:  {conn_txt}")
-        print(f"  🛡️  E2E SECURITY:   {sec_txt}")
-        print(f"{C_CYAN}─"*60 + f"{C_END}")
-        print(f" {C_BOLD}MENU:{C_END} scan, conn, msg <txt>, disc, cls, q")
-        print(f"{C_CYAN}─"*60 + f"{C_END}\n")
+        status = f"{C_GREEN}CONNECTED 🔗{C_END}" if self.manager.uplink else f"{C_RED}DISCONNECTED ❌{C_END}"
+        print(f"  📡  LINK:    {status}")
+        
+        # --- FORWARDING TABLE VISUAL ---
+        print(f"\n{C_BOLD}  🗺️  FORWARDING TABLE (Quem eu conheço):{C_END}")
+        if not self.router.forwarding_table:
+            print("     (Vazia)")
+        else:
+            for nid, via in self.router.forwarding_table.items():
+                via_str = "UPLINK" if via == self.manager.uplink else f"Downlink ({via})"
+                print(f"     • {nid} -> via {via_str}")
+        
+        print(f"\n{C_CYAN}────────────────────────────────────────────────────────────{C_END}")
+        print(f" {C_BOLD}MENU:{C_END} scan (auto), list (escolher), msg <txt>, who (rede), disc, cls, q")
+        print(f"{C_CYAN}────────────────────────────────────────────────────────────{C_END}\n")
 
     def run_cli(self):
         import select
-        
-        last_uplink = None
-        last_secure = None
-        
         self.draw_ui()
-        print(f"{C_BOLD}{C_GREEN}node@{MY_NID}# {C_END}", end="", flush=True)
+        sys.stdout.write(self.prompt_text)
+        sys.stdout.flush()
 
         while self.running:
-            curr_uplink = self.manager.uplink
-            curr_secure = getattr(self.router, 'is_secured', False)
-
-            if curr_uplink != last_uplink or curr_secure != last_secure:
-                
-                # --- CORREÇÃO AQUI ---
-                # Se tínhamos uplink e agora não temos (caiu ou demos disconnect), limpar memória DTLS
-                if last_uplink is not None and curr_uplink is None:
-                     print(f"\n{C_YELLOW}[SYSTEM] Ligação perdida. A limpar sessões DTLS...{C_END}")
-                     self.dtls_manager.sessions.clear()
-                     self.dtls_manager.pending_handshakes.clear()
-                # ---------------------
-
-                self.draw_ui()
-                print(f"{C_BOLD}{C_GREEN}node@{MY_NID}# {C_END}", end="", flush=True)
-                
-                last_uplink = curr_uplink
-                last_secure = curr_secure
-
-            if select.select([sys.stdin], [], [], 0.2)[0]:
+            if select.select([sys.stdin], [], [], 0.5)[0]:
                 line = sys.stdin.readline().strip()
                 if not line: 
-                    print(f"{C_BOLD}{C_GREEN}node@{MY_NID}# {C_END}", end="", flush=True)
+                    sys.stdout.write(self.prompt_text)
+                    sys.stdout.flush()
                     continue
                 
                 parts = line.split()
                 cmd = parts[0].lower()
 
                 if cmd == "scan":
-                    scan_for_candidates(self.manager.adapter)
-                    input("Pressiona Enter para continuar...") 
-                    self.draw_ui()
-                elif cmd == "conn":
+                    # Conexão automática (comportamento antigo)
                     if self.manager.find_and_connect_uplink():
-                        self.wait_for_secure_connection()
-                        last_uplink = None 
+                        # Assume 0 hops se auto-conectar ao Sink, ou 1 (fallback)
+                        self.wait_for_secure_connection(0) 
+
+                elif cmd == "list":
+                    # ESCOLHA MANUAL
+                    cand, hops = self.scan_and_select()
+                    if cand:
+                        # Chama manager diretamente com o objeto selecionado
+                        if self.manager.connect_to_specific_device(cand['device_obj']):
+                            self.wait_for_secure_connection(hops)
+                        self.draw_ui()
+
                 elif cmd == "msg":
-                    if len(parts) < 2: 
-                        print("Erro: msg <texto>")
+                    if len(parts) < 2: self.safe_print("Use: msg <texto>")
                     else:
-                        msg_text = " ".join(parts[1:])
-                        if SINK_NID in self.dtls_manager.sessions:
-                            self.dtls_manager.send_data(SINK_NID, msg_text, client_id=self.my_client_id)
-                        else:
-                            print(f"{C_YELLOW}[DTLS] A negociar sessão E2E...{C_END}")
-                            self.dtls_manager.start_handshake(SINK_NID)
-                            time.sleep(1)
-                elif cmd == "cls": 
+                        txt = " ".join(parts[1:])
+                        if SINK_NID not in self.dtls_manager.sessions:
+                             self.safe_print(f"{C_YELLOW}[DTLS] A iniciar sessão E2E...{C_END}")
+                             self.dtls_manager.start_handshake(SINK_NID)
+                             time.sleep(2) 
+                        self.dtls_manager.send_data(SINK_NID, txt)
+
+                elif cmd == "who":
+                    # Consulta ao Sink para saber quem está na rede
+                    if SINK_NID not in self.dtls_manager.sessions:
+                         self.safe_print("Sem sessão com Sink. Tente 'msg ola' primeiro.")
+                    else:
+                        self.safe_print("A pedir lista de nós ao Sink...")
+                        # Envia comando especial
+                        self.dtls_manager.send_data(SINK_NID, "LIST_NODES", service="NetworkManager")
+
+                elif cmd == "disc":
+                    self.safe_print(f"{C_YELLOW}A desligar...{C_END}")
+                    self.reset_network_state()
+                    self.on_uplink_death()
+                elif cmd == "cls":
                     self.draw_ui()
-                elif cmd == "disc": 
-                    self.manager.disconnect_all()
-                elif cmd == "q": 
+                elif cmd == "q":
                     self.running = False
+                    self.reset_network_state()
                     os._exit(0)
                 
-                print(f"{C_BOLD}{C_GREEN}node@{MY_NID}# {C_END}", end="", flush=True)
-
-    def auto_retry_loop(self):
-        while self.running:
-            if self.manager.uplink and self.manager.session_key:
-                if SINK_NID not in self.dtls_manager.sessions:
-                    now = time.time()
-                    if now - self.last_handshake_attempt > 10:
-                        self.dtls_manager.start_handshake(SINK_NID)
-                        self.last_handshake_attempt = now
-            time.sleep(2)
+                sys.stdout.write(self.prompt_text)
+                sys.stdout.flush()
 
 if __name__ == "__main__":
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     app = NodeApp()
-    threading.Thread(target=app.auto_retry_loop, daemon=True).start()
     app.run_cli()

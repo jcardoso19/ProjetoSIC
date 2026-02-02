@@ -13,10 +13,9 @@ class ConnectionManager:
         self.my_nid = my_nid
         self.security_manager = security_manager
         self.adapter = self._get_adapter(adapter_index)
-        try:
-            print(f"[BLE] A usar adaptador (SimplePyBLE): {self.adapter.identifier()}")
-        except Exception:
-            pass
+        try: print(f"[BLE] Adapter ativo: {self.adapter.identifier()}")
+        except: pass
+        
         self.uplink = None 
         self.uplink_info = {}
         self.router = None
@@ -30,92 +29,89 @@ class ConnectionManager:
 
     def _get_adapter(self, target_index):
         adapters = simplepyble.Adapter.get_adapters()
-        if not adapters:
-            raise Exception("ERRO CRÍTICO: Bluetooth não encontrado.")
-
+        if not adapters: raise Exception("Bluetooth não detetado!")
         want = f"hci{target_index}"
         for a in adapters:
-            try:
-                if want in str(a.identifier()).lower():
-                    return a
-            except Exception:
-                continue
-
-        return adapters[target_index] if target_index < len(adapters) else adapters[0]
+            if want in str(a.identifier()).lower(): return a
+        return adapters[0]
 
     def _call_with_timeout(self, fn, timeout_s, label):
         result = {}
-        error = {}
-
         def runner():
-            try:
-                result["value"] = fn()
-            except Exception as e:
-                error["exc"] = e
-
+            try: result["value"] = fn()
+            except Exception as e: result["error"] = e
         t = threading.Thread(target=runner, daemon=True)
         t.start()
         t.join(timeout_s)
-
-        if t.is_alive():
-            raise TimeoutError(f"Timeout em '{label}' ({timeout_s}s)")
-        if "exc" in error:
-            raise error["exc"]
+        if t.is_alive(): raise TimeoutError(f"Timeout: {label}")
+        if "error" in result: raise result["error"]
         return result.get("value")
+
+    def connect_to_specific_device(self, device):
+        """Conecta a um dispositivo escolhido manualmente."""
+        if self.uplink: return True
+        print(f"[CONNECT] A tentar ligação manual a {device.address()}...")
+        return self._perform_connection(device, {'name': 'Manual', 'address': device.address()})
 
     def find_and_connect_uplink(self):
         if self.uplink: return True
-        print("[MANAGER] A procurar novo Uplink...")
+        print("[MANAGER] A procurar Sink...")
         candidates = scan_for_candidates(self.adapter) 
         if not candidates: return False
 
         for candidate in candidates:
-            device = candidate['device_obj']
-            print(f"[CONNECT] A tentar {candidate['name']}...")
-            try:
-                print("[CONNECT] A chamar device.connect()...")
-                self._call_with_timeout(device.connect, 20, "device.connect")
-                print("[DEBUG] Conectado! A aguardar estabilização (2s)...")
-                time.sleep(2) 
-
-                print("[CONNECT] A descobrir serviços (device.services())...")
-                services = self._call_with_timeout(device.services, 15, "device.services")
-                found_s = None
-                found_c = None
-                for s in services:
-                    if s.uuid().lower() == REF_SERVICE_UUID.lower():
-                        found_s = s.uuid()
-                        for c in s.characteristics():
-                            if c.uuid().lower() == REF_CHAR_UUID.lower():
-                                found_c = c.uuid()
-                        break
-                
-                if not found_s or not found_c:
-                    device.disconnect()
-                    continue
-
-                self.active_service_uuid = found_s
-                self.active_char_uuid = found_c
-                print("[BLE] A ativar notificações (device.notify)...")
-                device.notify(self.active_service_uuid, self.active_char_uuid, self._on_data_received_from_uplink)
-                print("[BLE] ✅ Notificações ativadas.")
-
-                # Mitiga corrida comum: o CCCD/notify pode demorar a ficar efetivo
-                time.sleep(0.5)
-
-                self.uplink = device
-                self.uplink_info = candidate
-                device.set_callback_on_disconnected(self.on_uplink_lost)
-                
-                print(f"[SUCCESS] 🔗 LIGADO A {candidate['name']}!")
-                self.rx_buffer = bytearray()
-                self._start_handshake_thread()
+            if self._perform_connection(candidate['device_obj'], candidate):
                 return True
-            except Exception as e:
-                print(f"[CONNECT] ❌ Falha a conectar/descobrir serviços em {candidate['name']}: {e}")
-                try: device.disconnect()
-                except: pass
         return False
+
+    def _perform_connection(self, device, candidate_info):
+        """Lógica comum de conexão (Blindada)."""
+        try:
+            self._call_with_timeout(device.connect, 15, "Connect")
+            time.sleep(2.0) 
+
+            services = self._call_with_timeout(device.services, 10, "Services")
+            found_s = None
+            found_c = None
+            
+            for s in services:
+                if s.uuid().lower() == REF_SERVICE_UUID.lower():
+                    found_s = s.uuid()
+                    for c in s.characteristics():
+                        if c.uuid().lower() == REF_CHAR_UUID.lower():
+                            found_c = c.uuid()
+                    break
+            
+            if not found_s:
+                print(f"[CONNECT] Serviço SIC não encontrado.")
+                device.disconnect()
+                return False
+
+            self.active_service_uuid = found_s
+            self.active_char_uuid = found_c
+            
+            try:
+                device.notify(found_s, found_c, self._on_data_received_from_uplink)
+            except Exception as e:
+                print(f"[BLE] Erro no notify: {e}")
+                device.disconnect()
+                return False
+                
+            time.sleep(1.5) 
+            print("[BLE] ✅ Notificações ativadas.")
+
+            self.uplink = device
+            self.uplink_info = candidate_info
+            device.set_callback_on_disconnected(self.on_uplink_lost)
+            
+            self.rx_buffer = bytearray()
+            self._start_handshake_thread()
+            return True
+        except Exception as e:
+            print(f"[CONNECT] Falha: {e}")
+            try: device.disconnect()
+            except: pass
+            return False
 
     def _start_handshake_thread(self):
         if not self.security_manager: return
@@ -123,61 +119,77 @@ class ConnectionManager:
         threading.Thread(target=self._handshake_loop, daemon=True).start()
 
     def _handshake_loop(self):
-        print(f"[HANDSHAKE] 🔄 A iniciar protocolo de ligação...")
+        print(f"[HANDSHAKE] 🔄 A iniciar protocolo...")
         try: cert_pem = self.security_manager.local_cert_pem
         except: 
             with open(self.security_manager.cert_path, "rb") as f: cert_pem = f.read()
 
         attempt = 1
+        self.rx_buffer = bytearray() 
+        
         while self.handshake_running and self.uplink and self.session_key is None:
             print(f"[HANDSHAKE] 🤝 A enviar HELLO (Tentativa {attempt})...")
             
             hello_pkt = Packet(self.my_nid, "UPLINK", cert_pem.decode('utf-8'), MSG_TYPE_HELLO)
-            self.send_packet(hello_pkt)
             
-            for _ in range(60):
-                if self.session_key or not self.uplink: break
-                time.sleep(0.1)
+            if self.send_packet(hello_pkt):
+                print("[HANDSHAKE] Enviado. A aguardar resposta...")
+                for _ in range(150):
+                    if self.session_key or not self.uplink: break
+                    time.sleep(0.1)
+            else:
+                print("[HANDSHAKE] ⚠️ Falha no envio.")
             
+            if self.session_key: break
+
             attempt += 1
-            if attempt > 10:
-                print("[HANDSHAKE] ❌ O Sink não responde.")
+            if attempt > 5:
+                print("[HANDSHAKE] ❌ Desisto. Sink não responde.")
                 self.on_uplink_lost()
                 return
+            time.sleep(2.0)
 
     def send_packet(self, packet):
-        if not self.uplink: return
+        if not self.uplink: return False
         try:
             data_bytes = packet.to_bytes()
             full_payload = len(data_bytes).to_bytes(4, 'big') + data_bytes
-            
-            CHUNK_SIZE = 100 
-            for i in range(0, len(full_payload), CHUNK_SIZE):
+            CHUNK_SIZE = 20 
+            total_len = len(full_payload)
+            for i in range(0, total_len, CHUNK_SIZE):
                 chunk = full_payload[i : i + CHUNK_SIZE]
-                self.uplink.write_request(self.active_service_uuid, self.active_char_uuid, chunk)
-                time.sleep(0.15) 
-        except Exception as e:
-            print(f"[BLE] ❌ write_request falhou (vai assumir uplink perdido): {e}")
-            self.on_uplink_lost()
+                success = False
+                for r in range(5):
+                    try:
+                        self.uplink.write_request(self.active_service_uuid, self.active_char_uuid, chunk)
+                        success = True
+                        break
+                    except Exception as e: time.sleep(0.2)
+                if not success: return False
+                time.sleep(0.05)
+            return True
+        except: return False
 
     def _on_data_received_from_uplink(self, data_bytes):
-        self.rx_buffer.extend(data_bytes)
-        while len(self.rx_buffer) >= 4:
-            msg_len = int.from_bytes(self.rx_buffer[:4], 'big')
-            if len(self.rx_buffer) < 4 + msg_len: break
-            
-            packet_bytes = bytes(self.rx_buffer[4 : 4 + msg_len])
-            del self.rx_buffer[:4 + msg_len]
-            self._handle_complete_packet(packet_bytes)
+        try:
+            self.rx_buffer.extend(data_bytes)
+            while len(self.rx_buffer) >= 4:
+                msg_len = int.from_bytes(self.rx_buffer[:4], 'big')
+                if len(self.rx_buffer) < 4 + msg_len: break
+                
+                packet_bytes = bytes(self.rx_buffer[4 : 4 + msg_len])
+                del self.rx_buffer[:4 + msg_len]
+                self._handle_complete_packet(packet_bytes)
+        except Exception as e: print(f"[RX] Erro: {e}")
 
     def _handle_complete_packet(self, data_bytes):
         try:
             packet = Packet.from_bytes(data_bytes)
             if not packet: return 
-
+            
             if packet.msg_type == MSG_TYPE_HELLO_ACK:
                 if self.session_key: return
-                print(f"[HANDSHAKE] 📩 Recebido HELLO_ACK")
+                print(f"[HANDSHAKE] 📩 Recebido HELLO_ACK de {packet.source_nid}")
                 peer_pub = self.security_manager.verify_certificate(packet.payload.encode('utf-8'))
                 self.session_key = self.security_manager.derive_session_key(
                     self.security_manager.local_private_key, peer_pub
@@ -185,21 +197,22 @@ class ConnectionManager:
                 print(f"[SEC] 🔐 CANAL SEGURO ESTABELECIDO!")
                 if self.router: self.router.reset_buffer(self.uplink)
                 return
-        except: pass
-
-        if self.router:
+        except Exception as e: pass
+        
+        if self.router and self.session_key:
             header = len(data_bytes).to_bytes(4, 'big')
             self.router.process_packet(header + data_bytes, source_connection=self.uplink)
 
     def on_uplink_lost(self, device=None):
-        print("\n⚡ [ALERT] LIGAÇÃO CAIU!")
-        self.uplink = None
-        self.session_key = None 
-        self.handshake_running = False
-        self.rx_buffer = bytearray()
+        if self.uplink:
+            print("\n⚡ [ALERT] LIGAÇÃO CAIU!")
+            self.uplink = None
+            self.session_key = None 
+            self.handshake_running = False
 
     def disconnect_all(self):
         self.handshake_running = False
         if self.uplink:
             try: self.uplink.disconnect()
             except: pass
+        self.uplink = None
