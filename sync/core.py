@@ -108,7 +108,7 @@ class SinkCore:
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
             try:
-                self.advertiser.is_running = True # Flag para UI
+                self.advertiser.is_running = True
                 new_loop.run_until_complete(self.advertiser.run())
             except:
                 self.advertiser.is_running = False

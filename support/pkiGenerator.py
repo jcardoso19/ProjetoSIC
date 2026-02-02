@@ -63,14 +63,14 @@ def create_entity_cert(name, role, ca_key, ca_subject):
     subject = x509.Name([
         x509.NameAttribute(NameOID.COUNTRY_NAME, u"PT"),
         x509.NameAttribute(NameOID.ORGANIZATION_NAME, u"Projeto SIC"),
-        x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, role), # Importante para distinguir Sink de Node
+        x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, role),
         x509.NameAttribute(NameOID.COMMON_NAME, name),
     ])
     
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
-        .issuer_name(ca_subject) # Assinado pela CA
+        .issuer_name(ca_subject)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(datetime.datetime.now(datetime.timezone.utc))

@@ -56,7 +56,6 @@ class Router:
         if not packet: return
         if packet.source_nid == self.my_nid: return
         
-        # 1. Routing Learning (Simples): Se recebo algo de X por esta conexão, X está aqui.
         if packet.source_nid not in self.forwarding_table:
              self.forwarding_table[packet.source_nid] = source_connection
 
@@ -84,13 +83,11 @@ class Router:
 
     def handle_handshake(self, packet, source_connection):
         if packet.msg_type == MSG_TYPE_HELLO:
-            # print(f"[ROUTER] 🤝 HELLO de {packet.source_nid}")
             try:
                 self.reset_buffer(source_connection)
                 child_pub_key = self.security_manager.verify_certificate(packet.payload.encode('utf-8'))
                 session_key = self.security_manager.derive_session_key(self.security_manager.local_private_key, child_pub_key)
                 
-                # Registar Downlink
                 self.downlink_keys[source_connection] = session_key
                 self.last_seq_nums[packet.source_nid] = -1
                 self.forwarding_table[packet.source_nid] = source_connection
@@ -106,7 +103,7 @@ class Router:
             if not target_conn:
                 target_conn = self.connection_manager.uplink
         
-            if not target_conn: return # Packet drop (nowhere to go)
+            if not target_conn: return
 
             if packet.msg_type not in [MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK]:
                 self.routed_messages_count += 1
@@ -131,14 +128,10 @@ class Router:
     def propagate_heartbeat(self, original_packet):
         for mac_conn in self.downlink_keys.keys():
             pkt = copy.deepcopy(original_packet)
-            # Propaga para todos os filhos (Downlinks)
-            # Como é broadcast na sub-árvore, o dest_nid não é critico aqui se usarmos flooding,
-            # mas vamos manter a lógica de enviar para os MACs conhecidos.
             self.forward_to_mac(pkt, mac_conn)
 
     def forward_to_mac(self, packet, mac_conn):
         """Helper para enviar diretamente para um MAC específico (usado no flood de HB)"""
-        # (Reutiliza lógica do forward mas força o destino)
         conn_key = mac_conn
         packet.seq_num = self.outgoing_seq_nums.get(conn_key, 0) + 1
         self.outgoing_seq_nums[conn_key] = packet.seq_num

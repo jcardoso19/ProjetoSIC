@@ -2,10 +2,10 @@ import simplepyble
 import time
 
 SIC_SERVICE_UUID = "A07498CA-AD5B-474E-940D-16F1FBE7E8CD"
-TARGET_NAMES = ["SIC-Node", "SINK_DEVICE", "SINK", "SIC"] # Nomes aceites
+TARGET_NAMES = ["SIC-Node", "SINK_DEVICE", "SINK", "SIC"]
 
 MANUFACTURER_ID = 0xFFFF
-MFG_SIGNATURE = (0xFF, 0xFF)  # prefixo usado no advertiser
+MFG_SIGNATURE = (0xFF, 0xFF)
 
 FORCE_MAC = None 
 
@@ -36,7 +36,6 @@ def scan_for_candidates(adapter, duration=4000):
         services = device.services()
 
         hops = 0
-        # Alguns stacks não expõem serviços/nome no scan, mas expõem manufacturer data.
         try:
             mfg = device.manufacturer_data()
         except Exception:
@@ -51,7 +50,6 @@ def scan_for_candidates(adapter, duration=4000):
             print(f"      -> Match por MAC Fixo!")
 
         if not is_candidate:
-            # Match robusto: assinatura no ManufacturerData
             try:
                 if MANUFACTURER_ID in mfg:
                     raw = mfg[MANUFACTURER_ID]
@@ -89,7 +87,6 @@ def scan_for_candidates(adapter, duration=4000):
 
     print(f"   ------------------------------")
 
-    # Preferência: menor número de hops, e em empate maior RSSI
     candidates.sort(key=lambda x: (x.get('hops', 99), -x.get('rssi', -999)))
 
     if not candidates:

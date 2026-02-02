@@ -41,8 +41,7 @@ class NodeApp:
         self.running = True
         self.prompt_text = f"{C_BOLD}{C_GREEN}node@{MY_NID}# {C_END}"
         self.log_lock = threading.Lock()
-        self.current_hops = 99 # Estado inicial: Desconectado
-
+        self.current_hops = 99 
         print(f"{C_BOLD}{C_BLUE}[SYSTEM] A inicializar Node: {MY_NID}...{C_END}")
 
         try:
@@ -169,7 +168,6 @@ class NodeApp:
             valid_indices.append(i)
         print("------------------------------")
         
-        # Input Bloqueante (Simples)
         while True:
             try:
                 choice = input("Escolha o índice (ou 'c' para cancelar): ")
@@ -190,7 +188,6 @@ class NodeApp:
         status = f"{C_GREEN}CONNECTED 🔗{C_END}" if self.manager.uplink else f"{C_RED}DISCONNECTED ❌{C_END}"
         print(f"  📡  LINK:    {status}")
         
-        # --- FORWARDING TABLE VISUAL ---
         print(f"\n{C_BOLD}  🗺️  FORWARDING TABLE (Quem eu conheço):{C_END}")
         if not self.router.forwarding_table:
             print("     (Vazia)")
@@ -221,16 +218,12 @@ class NodeApp:
                 cmd = parts[0].lower()
 
                 if cmd == "scan":
-                    # Conexão automática (comportamento antigo)
                     if self.manager.find_and_connect_uplink():
-                        # Assume 0 hops se auto-conectar ao Sink, ou 1 (fallback)
                         self.wait_for_secure_connection(0) 
 
                 elif cmd == "list":
-                    # ESCOLHA MANUAL
                     cand, hops = self.scan_and_select()
                     if cand:
-                        # Chama manager diretamente com o objeto selecionado
                         if self.manager.connect_to_specific_device(cand['device_obj']):
                             self.wait_for_secure_connection(hops)
                         self.draw_ui()
