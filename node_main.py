@@ -58,9 +58,6 @@ class NodeApp:
         self.router.set_app_callback(self.on_app_message)
         self.hb_monitor = HeartbeatManager(self.on_uplink_death, interval=5)
         self.router.on_heartbeat = self.on_heartbeat_safe 
-        
-        self.dtls_manager.register_service("Inbox", self.handle_inbox)
-        self.dtls_manager.register_service("NetworkManager", self.handle_net_discovery)
 
         self.advertiser = None 
         self.gatt_server_started = False
@@ -74,7 +71,6 @@ class NodeApp:
 
     def on_heartbeat_safe(self, nid):
         self.hb_monitor.heartbeat_received()
-        # Não imprimimos para não poluir, mas o sistema sabe que está vivo
 
     def on_app_message(self, packet):
         if packet.msg_type in [MSG_TYPE_DATA, MSG_TYPE_E2E_DATA, MSG_TYPE_E2E_HELLO, MSG_TYPE_E2E_HELLO_ACK]:
