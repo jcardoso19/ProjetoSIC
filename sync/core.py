@@ -52,6 +52,7 @@ class SinkCore:
         self.dtls_manager = DTLSManager(SINK_NID, self.sec_manager, self.router.forward)
         self.router.set_app_callback(self.dtls_manager.process_packet)
         self.dtls_manager.register_service("Inbox", self.on_inbox_message)
+        self.dtls_manager.register_service("NetworkManager", self.handle_network_query)
         
 
     def draw_ui(self):
@@ -189,7 +190,17 @@ class SinkCore:
                     sys.exit(0)
             except Exception as e:
                 print(f"{C_RED}Error: {e}{C_END}")
-
+    def handle_network_query(self, source_nid, client_id, message):
+        if message == "LIST_NODES":
+            all_nodes = list(self.router.forwarding_table.keys())
+            if SINK_NID not in all_nodes:
+                all_nodes.append(SINK_NID)
+        
+            response_payload = json.dumps(all_nodes)
+        
+            self.safe_print(f"[REDE] Nó {source_nid} pediu a lista de membros.")
+        
+            self.dtls_manager.send_data(source_nid, response_payload, service="NetworkManager")
 if __name__ == "__main__":
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     core = SinkCore()

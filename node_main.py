@@ -61,6 +61,8 @@ class NodeApp:
 
         self.advertiser = None 
         self.gatt_server_started = False
+    
+        self.dtls_manager.register_service("NetworkManager", self.handle_network_list)
 
     def safe_print(self, text):
         with self.log_lock:
@@ -246,9 +248,9 @@ class NodeApp:
 
                 elif cmd == "who":
                     if SINK_NID not in self.dtls_manager.sessions:
-                         self.safe_print("Sem sessão com Sink. Tente 'msg ola' primeiro.")
+                        self.safe_print(f"{C_YELLOW}Sem sessão segura com o Sink. Estabeleça ligação primeiro.{C_END}")
                     else:
-                        self.safe_print("A pedir lista de nós ao Sink...")
+                        self.safe_print("A solicitar lista de nós ao Sink...")
                         self.dtls_manager.send_data(SINK_NID, "LIST_NODES", service="NetworkManager")
 
                 elif cmd == "disc":
@@ -263,6 +265,19 @@ class NodeApp:
                 
                 sys.stdout.write(self.prompt_text)
                 sys.stdout.flush()
+    def handle_network_list(self, source_nid, client_id, message):
+        try:
+            nodes = json.loads(message)
+        
+            self.safe_print(f"\n{C_CYAN}╔════════════════════════════════════════════╗{C_END}")
+            self.safe_print(f"{C_CYAN}║  👥 NÓS ATIVOS NA REDE                     ║{C_END}")
+            self.safe_print(f"{C_CYAN}╠════════════════════════════════════════════╣{C_END}")
+            for node in nodes:
+                status = " (você)" if node == MY_NID else ""
+                self.safe_print(f"{C_CYAN}║  • {node:<39}{status}║{C_END}")
+            self.safe_print(f"{C_CYAN}╚════════════════════════════════════════════╝{C_END}")
+        except Exception as e:
+            self.safe_print(f"{C_RED}[ERRO] Falha ao processar lista de nós: {e}{C_END}")
 
 if __name__ == "__main__":
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
