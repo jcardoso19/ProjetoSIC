@@ -74,12 +74,15 @@ class ConnectionManager:
             print(f"[CONNECT] A tentar {candidate['name']}...")
             try:
                 print("[CONNECT] A chamar device.connect()...")
-                self._call_with_timeout(device.connect, 20, "device.connect")
+                # Aumentei timeout para 15s para dar tempo ao sistema
+                self._call_with_timeout(device.connect, 15, "device.connect")
+                
+                # ESTABILIZAÇÃO CRÍTICA: Bluetooth precisa de tempo após conectar
                 print("[DEBUG] Conectado! A aguardar estabilização (2s)...")
-                time.sleep(2) 
+                time.sleep(2.0)
 
-                print("[CONNECT] A descobrir serviços (device.services())...")
-                services = self._call_with_timeout(device.services, 15, "device.services")
+                print("[CONNECT] A descobrir serviços...")
+                services = self._call_with_timeout(device.services, 10, "device.services")
                 found_s = None
                 found_c = None
                 for s in services:
@@ -91,16 +94,20 @@ class ConnectionManager:
                         break
                 
                 if not found_s or not found_c:
+                    print("[CONNECT] Serviço SIC não encontrado neste dispositivo.")
                     device.disconnect()
                     continue
 
                 self.active_service_uuid = found_s
                 self.active_char_uuid = found_c
-                print("[BLE] A ativar notificações (device.notify)...")
+                
+                print("[BLE] A ativar notificações...")
                 device.notify(self.active_service_uuid, self.active_char_uuid, self._on_data_received_from_uplink)
+                
+                # ESTABILIZAÇÃO PÓS-NOTIFY: 
+                # Muitas vezes o notify retorna antes do callback estar 100% pronto no BlueZ
+                time.sleep(1.0) 
                 print("[BLE] ✅ Notificações ativadas.")
-
-                time.sleep(0.5)
 
                 self.uplink = device
                 self.uplink_info = candidate
@@ -111,7 +118,7 @@ class ConnectionManager:
                 self._start_handshake_thread()
                 return True
             except Exception as e:
-                print(f"[CONNECT] ❌ Falha a conectar/descobrir serviços em {candidate['name']}: {e}")
+                print(f"[CONNECT] ❌ Falha a conectar em {candidate['name']}: {e}")
                 try: device.disconnect()
                 except: pass
         return False
@@ -128,46 +135,95 @@ class ConnectionManager:
             with open(self.security_manager.cert_path, "rb") as f: cert_pem = f.read()
 
         attempt = 1
+        # Limpar buffer antes de começar para garantir que não lemos lixo antigo
+        self.rx_buffer = bytearray()
+        
         while self.handshake_running and self.uplink and self.session_key is None:
             print(f"[HANDSHAKE] 🤝 A enviar HELLO (Tentativa {attempt})...")
             
             hello_pkt = Packet(self.my_nid, "UPLINK", cert_pem.decode('utf-8'), MSG_TYPE_HELLO)
-            self.send_packet(hello_pkt)
             
-            for _ in range(60):
+            # Tentar enviar. Se falhar o envio (return False), abortamos este ciclo
+            if not self.send_packet(hello_pkt):
+                print("[HANDSHAKE] Falha crítica no envio. A aguardar recuperação...")
+                time.sleep(2)
+            
+            # Esperar pela resposta (ACK)
+            for _ in range(50): # Espera até 5 segundos
                 if self.session_key or not self.uplink: break
                 time.sleep(0.1)
             
             attempt += 1
             if attempt > 10:
-                print("[HANDSHAKE] ❌ O Sink não responde.")
+                print("[HANDSHAKE] ❌ O Sink não responde após 10 tentativas.")
                 self.on_uplink_lost()
                 return
+            
+            # Pequena pausa antes da próxima tentativa
+            time.sleep(1.0)
 
     def send_packet(self, packet):
-        if not self.uplink: return
+        if not self.uplink: return False
         try:
             data_bytes = packet.to_bytes()
+            # 4 bytes de cabeçalho indicando o tamanho total
             full_payload = len(data_bytes).to_bytes(4, 'big') + data_bytes
             
-            CHUNK_SIZE = 100 
+            # --- CORREÇÃO DE ESTABILIDADE ---
+            # Reduzir CHUNK_SIZE para 50 (mais seguro que 100 para evitar drops de MTU)
+            CHUNK_SIZE = 50 
+            
+            total_chunks = (len(full_payload) + CHUNK_SIZE - 1) // CHUNK_SIZE
+            
             for i in range(0, len(full_payload), CHUNK_SIZE):
                 chunk = full_payload[i : i + CHUNK_SIZE]
-                self.uplink.write_request(self.active_service_uuid, self.active_char_uuid, chunk)
-                time.sleep(0.15) 
+                
+                # Mecanismo de Retry por Chunk
+                chunk_sent = False
+                for retry in range(3):
+                    try:
+                        # write_request espera confirmação do receptor (mais lento, mas fiável)
+                        self.uplink.write_request(self.active_service_uuid, self.active_char_uuid, chunk)
+                        chunk_sent = True
+                        break # Sucesso, sai do retry
+                    except Exception as e:
+                        print(f"[BLE-W] Falha chunk {i//CHUNK_SIZE}/{total_chunks} (Retry {retry+1}): {e}")
+                        time.sleep(0.2)
+                
+                if not chunk_sent:
+                    print("[BLE] Falha crítica: Não foi possível enviar chunk após 3 tentativas.")
+                    return False
+
+                # Pausa para não engasgar o controlador Bluetooth
+                time.sleep(0.05) 
+            
+            return True
+            
         except Exception as e:
-            print(f"[BLE] ❌ write_request falhou (vai assumir uplink perdido): {e}")
-            self.on_uplink_lost()
+            print(f"[BLE] ❌ Erro geral no send_packet: {e}")
+            # Não chamamos on_uplink_lost imediatamente para dar chance de retry na app
+            return False
 
     def _on_data_received_from_uplink(self, data_bytes):
-        self.rx_buffer.extend(data_bytes)
-        while len(self.rx_buffer) >= 4:
-            msg_len = int.from_bytes(self.rx_buffer[:4], 'big')
-            if len(self.rx_buffer) < 4 + msg_len: break
+        # Callback assíncrono
+        try:
+            self.rx_buffer.extend(data_bytes)
             
-            packet_bytes = bytes(self.rx_buffer[4 : 4 + msg_len])
-            del self.rx_buffer[:4 + msg_len]
-            self._handle_complete_packet(packet_bytes)
+            # Processar stream de bytes
+            while len(self.rx_buffer) >= 4:
+                msg_len = int.from_bytes(self.rx_buffer[:4], 'big')
+                
+                # Se ainda não temos a mensagem toda, esperamos mais bytes
+                if len(self.rx_buffer) < 4 + msg_len: 
+                    break
+                
+                # Extrair o pacote completo
+                packet_bytes = bytes(self.rx_buffer[4 : 4 + msg_len])
+                del self.rx_buffer[:4 + msg_len] # Remover do buffer
+                
+                self._handle_complete_packet(packet_bytes)
+        except Exception as e:
+            print(f"[BLE-RX] Erro ao processar dados: {e}")
 
     def _handle_complete_packet(self, data_bytes):
         try:
@@ -175,30 +231,40 @@ class ConnectionManager:
             if not packet: return 
 
             if packet.msg_type == MSG_TYPE_HELLO_ACK:
-                if self.session_key: return
-                print(f"[HANDSHAKE] 📩 Recebido HELLO_ACK")
+                if self.session_key: return # Já temos chave, ignorar duplicados
+                
+                print(f"[HANDSHAKE] 📩 Recebido HELLO_ACK de {packet.source_nid}")
+                
+                # Verificar e derivar chave
                 peer_pub = self.security_manager.verify_certificate(packet.payload.encode('utf-8'))
                 self.session_key = self.security_manager.derive_session_key(
                     self.security_manager.local_private_key, peer_pub
                 )
+                
                 print(f"[SEC] 🔐 CANAL SEGURO ESTABELECIDO!")
+                # Limpar buffer do router para evitar processar lixo antigo
                 if self.router: self.router.reset_buffer(self.uplink)
                 return
-        except: pass
+        except Exception as e: 
+            print(f"[RX-Process] Erro: {e}")
 
-        if self.router:
+        # Se não for handshake, passa para o Router
+        if self.router and self.session_key:
             header = len(data_bytes).to_bytes(4, 'big')
             self.router.process_packet(header + data_bytes, source_connection=self.uplink)
 
     def on_uplink_lost(self, device=None):
-        print("\n⚡ [ALERT] LIGAÇÃO CAIU!")
-        self.uplink = None
-        self.session_key = None 
-        self.handshake_running = False
-        self.rx_buffer = bytearray()
+        # Só reporta se realmente tínhamos um uplink
+        if self.uplink is not None:
+            print("\n⚡ [ALERT] LIGAÇÃO CAIU!")
+            self.uplink = None
+            self.session_key = None 
+            self.handshake_running = False
+            self.rx_buffer = bytearray()
 
     def disconnect_all(self):
         self.handshake_running = False
         if self.uplink:
             try: self.uplink.disconnect()
             except: pass
+        self.uplink = None
