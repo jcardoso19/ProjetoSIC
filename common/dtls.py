@@ -28,13 +28,11 @@ class DTLSManager:
         if peer_nid in self.sessions: 
             return 
         
-        # --- CORREÇÃO: Definir 'now' ---
         now = time.time()
-        # -------------------------------
+        
         
         if peer_nid in self.pending_handshakes:
             last_attempt = self.pending_handshakes[peer_nid]
-            # Evita spam de handshakes (espera 3s entre tentativas)
             if now - last_attempt < 3.0:
                 print(f"[DTLS] Handshake com {peer_nid} em curso. Aguarde...")
                 return

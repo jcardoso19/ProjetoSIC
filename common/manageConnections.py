@@ -100,7 +100,6 @@ class ConnectionManager:
                 device.notify(self.active_service_uuid, self.active_char_uuid, self._on_data_received_from_uplink)
                 print("[BLE] ✅ Notificações ativadas.")
 
-                # Mitiga corrida comum: o CCCD/notify pode demorar a ficar efetivo
                 time.sleep(0.5)
 
                 self.uplink = device

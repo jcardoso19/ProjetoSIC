@@ -28,7 +28,6 @@ class SecurityManager:
         nonce = os.urandom(12)
         aad = packet.get_header_bytes()
         
-
         
         if isinstance(packet.payload, str):
             data = packet.payload.encode('utf-8')

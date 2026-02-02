@@ -4,10 +4,9 @@ import time
 import json
 import threading 
 
-# --- CORES ESTÉTICAS ---
-C_PINK = "\033[95m"   # Coração
-C_RED = "\033[91m"    # Erro
-C_GREY = "\033[90m"   # Texto discreto
+C_PINK = "\033[95m"
+C_RED = "\033[91m" 
+C_GREY = "\033[90m" 
 C_END = "\033[0m"
 
 class Router:
@@ -16,17 +15,18 @@ class Router:
         self.connection_manager = connection_manager
         self.security_manager = security_manager
         self.forwarding_table = {} 
-        self.downlink_keys = {} 
+        self.downlink_keys = {} # MAC -> SessionKey
         self.gatt_server = None
         self.last_seq_nums = {} 
         self.outgoing_seq_nums = {} 
         self.app_callback = None
         self.routed_messages_count = 0
-        self.blocked_nids = set()
+        self.blocked_nids = set() # NIDs para os quais cortamos o Heartbeat (Simulação de falha)
         self.rx_buffers = {} 
 
     def set_app_callback(self, callback): self.app_callback = callback
     def set_gatt_server(self, gatt_server): self.gatt_server = gatt_server
+    
     def reset_buffer(self, connection):
         conn_key = connection if isinstance(connection, str) else id(connection)
         self.rx_buffers[conn_key] = bytearray()
@@ -61,48 +61,46 @@ class Router:
         if not packet: return
         if packet.source_nid == self.my_nid: return
         
+        # Handshake Link-Layer
         if packet.msg_type in [MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK]:
             self.handle_handshake(packet, source_connection)
             return
 
+        # Segurança: Decifrar (Link-Layer)
         if self.security_manager:
             session_key = self._get_key_for_connection(source_connection)
             if not session_key or not self.security_manager.decrypt_packet(session_key, packet):
-                return
+                return # Drop packet se não conseguir decifrar
+            
+            # Verificar repetição (Replay Attack)
             last_seq = self.last_seq_nums.get(packet.source_nid, -1)
             if packet.seq_num <= last_seq: return
             self.last_seq_nums[packet.source_nid] = packet.seq_num
         
+        # Routing Learning: Atualizar tabela
         if packet.source_nid not in self.forwarding_table:
             self.forwarding_table[packet.source_nid] = source_connection
 
-        # --- VISUALIZAÇÃO DE HEARTBEATS ---
+        # Processar Heartbeats
         if packet.msg_type == MSG_TYPE_HEARTBEAT:
             raw_payload = packet.payload.strip().replace('\x00', '')
-            
-            # Caso 1: Heartbeat Simples ("ALIVE") - É o que estás a receber!
-            if "ALIVE" in raw_payload:
-                print(f"   {C_PINK}♥ [SINK ALIVE] (Seq Pkt: {packet.seq_num}){C_END}")
-                if hasattr(self, 'on_heartbeat'): self.on_heartbeat(packet.source_nid)
-                self.propagate_heartbeat(packet)
-                return
-
-            # Caso 2: Heartbeat Assinado (JSON Completo)
             try:
                 hb_data = json.loads(raw_payload)
                 val = hb_data.get("val")
                 sig = hb_data.get("sig")
                 sink_cert = self.security_manager.get_sink_certificate()
                 
+                # Validar Assinatura do Sink
                 if sink_cert and val and sig:
                     is_valid = self.security_manager.verify_signature_with_cert(sink_cert, val.encode('utf-8'), sig)
                     if is_valid:
-                        print(f"   {C_PINK}♥ [SINK ALIVE] (Assinatura Válida, Seq: {val}){C_END}")
+                        print(f"   {C_PINK}♥ [HEARTBEAT] Sink Validado (Seq: {val}){C_END}")
                         if hasattr(self, 'on_heartbeat'): self.on_heartbeat(packet.source_nid)
                         self.propagate_heartbeat(packet)
             except: pass
             return 
             
+        # Encaminhamento
         if packet.dest_nid == self.my_nid:
             if self.app_callback: self.app_callback(packet)
         else:
@@ -122,37 +120,50 @@ class Router:
                 
                 ack_pkt = Packet(source_nid=self.my_nid, dest_nid=packet.source_nid, msg_type=MSG_TYPE_HELLO_ACK, payload=self.security_manager.local_cert_pem.decode('utf-8'))
                 threading.Timer(0.5, lambda: self.forward(ack_pkt)).start()
-
             except Exception as e: print(f"[SEC] Falha Handshake: {e}")
 
     def forward(self, packet):
-        if packet.msg_type == MSG_TYPE_HEARTBEAT and packet.dest_nid in self.blocked_nids: return
+        # Filtro de DEBUG para Heartbeats
+        if packet.msg_type == MSG_TYPE_HEARTBEAT and packet.dest_nid in self.blocked_nids: 
+            return
+
+        # Decidir interface de saída
         target_conn = self.forwarding_table.get(packet.dest_nid) or self.connection_manager.uplink
         if not target_conn: return
 
-        if packet.msg_type not in [MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK]:
+        # Incrementar contador de mensagens roteadas (exceto controlo)
+        if packet.msg_type not in [MSG_TYPE_HELLO, MSG_TYPE_HELLO_ACK, MSG_TYPE_HEARTBEAT]:
+            self.routed_messages_count += 1
+            
+            # Cifrar salto-a-salto
             conn_key = target_conn if isinstance(target_conn, str) else "UPLINK"
             packet.seq_num = self.outgoing_seq_nums.get(conn_key, 0) + 1
             self.outgoing_seq_nums[conn_key] = packet.seq_num
             key = self._get_key_for_connection(target_conn)
             if key: self.security_manager.encrypt_packet(key, packet)
 
+        # Serializar e Fragmentar
         data_bytes = packet.to_bytes()
         full_payload = len(data_bytes).to_bytes(4, 'big') + data_bytes
         CHUNK_SIZE = 100
 
         if isinstance(target_conn, str): 
+            # Enviar para Downlink (via GATT Server)
             if self.gatt_server:
                 for i in range(0, len(full_payload), CHUNK_SIZE):
                     self.gatt_server.send_data(full_payload[i : i + CHUNK_SIZE])
                     time.sleep(0.15)
         else: 
+            # Enviar para Uplink (via Connection Manager)
             self.connection_manager.send_packet(packet)
             
     def propagate_heartbeat(self, original_packet):
+        # Clona e envia para todos os filhos conhecidos
         for mac_conn in self.downlink_keys.keys():
             pkt = copy.deepcopy(original_packet)
+            # Descobrir NID associado ao MAC para saber se está bloqueado
             target_nid = next((k for k, v in self.forwarding_table.items() if v == mac_conn), None)
+            
             if target_nid: 
                 pkt.dest_nid = target_nid
                 self.forward(pkt)
@@ -162,37 +173,12 @@ class Router:
         self.forward(pkt)
 
     def drop_connection(self, device_mac: str):
-        """Remove estado associado a um link BLE (downlink) que caiu."""
-        if not device_mac:
-            return
-
+        if not device_mac: return
+        # Limpar chaves e tabelas associadas ao dispositivo que caiu
         try:
-            if device_mac in self.downlink_keys:
-                del self.downlink_keys[device_mac]
-        except Exception:
-            pass
-
-        # Remover qualquer NID cujo forwarding apontava para este MAC
-        try:
+            if device_mac in self.downlink_keys: del self.downlink_keys[device_mac]
             to_remove = [nid for nid, conn in self.forwarding_table.items() if conn == device_mac]
             for nid in to_remove:
-                try:
-                    del self.forwarding_table[nid]
-                except Exception:
-                    pass
-
-                try:
-                    del self.last_seq_nums[nid]
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        # Limpar buffer RX associado ao MAC
-        try:
-            if device_mac in self.rx_buffers:
-                del self.rx_buffers[device_mac]
-        except Exception:
-            pass
-
-        # Não mexe em outgoing_seq_nums: é por ligação de saída (UPLINK ou conn_key)
+                if nid in self.forwarding_table: del self.forwarding_table[nid]
+            if device_mac in self.rx_buffers: del self.rx_buffers[device_mac]
+        except: pass
